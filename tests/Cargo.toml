@@ -1,5 +1,5 @@
 # Cross-crate integration + determinism harness (SPEC §4, §14).
-# Test-only crate: everything lives under tests/, nothing ships from here.
+# Test-only crate: the lib holds shared test helpers, nothing ships.
 [package]
 name = "embervale-tests"
 version.workspace = true
@@ -7,14 +7,17 @@ edition.workspace = true
 publish.workspace = true
 
 [lib]
-# No library code; this package exists to host integration tests.
 path = "src/lib.rs"
+
+[dependencies]
+data_defs = { workspace = true }
 
 [dev-dependencies]
 core_types = { workspace = true }
 core_rng = { workspace = true }
 core_ecs = { workspace = true }
 sim_time = { workspace = true }
+sim_people = { workspace = true }
 persistence = { workspace = true }
 headless = { workspace = true }
 serde = { workspace = true }

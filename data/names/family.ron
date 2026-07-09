@@ -1,0 +1,9 @@
+// Authored family names.
+NameList(names: [
+    "Voss", "Ashdown", "Brackenridge", "Caldwell", "Duskwater", "Emberly",
+    "Fenwick", "Grouse", "Hartell", "Ironwood", "Jessop", "Kilbride",
+    "Larkspur", "Mossgrove", "Nightingale", "Oakhurst", "Pellham", "Quill",
+    "Ravenscroft", "Stonebrook", "Thistlewood", "Underhill", "Vale",
+    "Wetherby", "Yarrow", "Alderman", "Birchall", "Cromleigh", "Dunmore",
+    "Elderfield",
+])

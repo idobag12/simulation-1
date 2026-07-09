@@ -1,0 +1,16 @@
+// Need definitions (SPEC §11 need vector; decay is hour-rate per SPEC §5).
+// Levels are per-million units: 0 = fully depleted, 1_000_000 = satisfied.
+// Order here IS the order of every citizen's need vector.
+NeedsConfig(
+    needs: [
+        // A day awake without food runs hunger down ~35%: 1_000_000 * 0.35 / 24h.
+        NeedDef(id: "hunger",  decay_per_hour: 14600, initial_min: 550000, initial_max: 1000000),
+        // Rest depletes over ~16 waking hours.
+        NeedDef(id: "rest",    decay_per_hour: 26000, initial_min: 500000, initial_max: 1000000),
+        NeedDef(id: "shelter", decay_per_hour: 2100,  initial_min: 700000, initial_max: 1000000),
+        NeedDef(id: "safety",  decay_per_hour: 1000,  initial_min: 750000, initial_max: 1000000),
+        NeedDef(id: "social",  decay_per_hour: 5200,  initial_min: 400000, initial_max: 1000000),
+        NeedDef(id: "esteem",  decay_per_hour: 2600,  initial_min: 350000, initial_max: 1000000),
+        NeedDef(id: "purpose", decay_per_hour: 1300,  initial_min: 300000, initial_max: 1000000),
+    ],
+)

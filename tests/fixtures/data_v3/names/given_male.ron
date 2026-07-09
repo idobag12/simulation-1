@@ -1,0 +1,7 @@
+// Authored male given names.
+NameList(names: [
+    "Jonas", "Bram", "Cadoc", "Deri", "Emrys", "Faelan", "Gareth", "Hew",
+    "Ivo", "Jori", "Kynan", "Llew", "Maddock", "Nye", "Osian", "Pryce",
+    "Rhain", "Sion", "Talfryn", "Urien", "Vaughn", "Wynn", "Ynyr", "Aldous",
+    "Bedwyr", "Caradoc", "Dylan", "Eirian", "Gwilym", "Heddwyn",
+])

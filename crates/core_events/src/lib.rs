@@ -287,6 +287,23 @@ impl Events {
     }
 }
 
+/// Pure save-migration helper (ADR 0005 §9): extends a saved event state's
+/// registration-name list with names APPENDED to the application's
+/// registration after the save was made.
+///
+/// Invariant: lossless — appended names cannot be referenced by any stored
+/// event (type indices in stored events all predate the extension), so
+/// only the name list changes. Callers (persistence migrations) own the
+/// guarantee that `appended` matches the registration growth of the format
+/// version being migrated to.
+pub fn extend_registration_bytes(bytes: &[u8], appended: &[&str]) -> Result<Vec<u8>, EventError> {
+    let mut state: EventsState = codec::from_bytes(bytes)?;
+    state
+        .names
+        .extend(appended.iter().map(|name| (*name).to_owned()));
+    Ok(codec::to_bytes(&state)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,5 +463,38 @@ mod tests {
             other.restore(&bytes),
             Err(EventError::StateMismatch(_))
         ));
+    }
+
+    #[test]
+    fn extend_registration_bytes_is_lossless_and_satisfies_strict_restore() {
+        #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+        struct Later(u8);
+        impl Event for Later {
+            const NAME: &'static str = "test.later";
+        }
+
+        // Save under the old registration with live state everywhere.
+        let mut old = events();
+        old.begin_tick(Ticks::new(0));
+        old.emit(&Ping(1)).unwrap();
+        old.schedule(Ticks::new(9), &Pong("s".into())).unwrap();
+        old.begin_tick(Ticks::new(1));
+        old.emit(&Ping(2)).unwrap();
+        let old_bytes = old.to_bytes().unwrap();
+
+        // Migrate to the grown registration; strict restore must accept it.
+        let migrated = extend_registration_bytes(&old_bytes, &["test.later"]).unwrap();
+        let mut new = events();
+        new.register::<Later>().unwrap();
+        new.restore(&migrated).unwrap();
+
+        // Old state intact, new type usable, behavior identical.
+        new.begin_tick(Ticks::new(2));
+        old.begin_tick(Ticks::new(2));
+        assert_eq!(new.read::<Ping>().unwrap(), old.read::<Ping>().unwrap());
+        assert_eq!(new.scheduled_count(), 1);
+        new.emit(&Later(7)).unwrap();
+        new.begin_tick(Ticks::new(3));
+        assert_eq!(new.read::<Later>().unwrap(), vec![Later(7)]);
     }
 }

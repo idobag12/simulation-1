@@ -1,5 +1,5 @@
-# Layer: front. May depend on: persistence, data_defs, sim_*, core_* +
-# external crates.
+# Layer: front. May depend on: persistence, data_defs, sim_* (sim_time,
+# sim_people), core_* + external crates.
 [package]
 name = "headless"
 version.workspace = true
@@ -11,6 +11,7 @@ core_types = { workspace = true }
 core_rng = { workspace = true }
 core_ecs = { workspace = true }
 sim_time = { workspace = true }
+sim_people = { workspace = true }
 persistence = { workspace = true }
 data_defs = { workspace = true }
 serde = { workspace = true }

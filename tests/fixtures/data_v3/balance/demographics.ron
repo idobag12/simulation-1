@@ -1,0 +1,19 @@
+// Genesis distributions and the demographic acceptance bands the Phase 2
+// exit criterion asserts (thresholds are data, not code, ADR 0005 §6).
+DemographicsConfig(
+    // Age pyramid: weights are per-mille and must sum to 1000.
+    age_bands: [
+        AgeBand(min_age_years: 0,  max_age_years: 15, weight_per_mille: 220),
+        AgeBand(min_age_years: 16, max_age_years: 35, weight_per_mille: 300),
+        AgeBand(min_age_years: 36, max_age_years: 55, weight_per_mille: 250),
+        AgeBand(min_age_years: 56, max_age_years: 70, weight_per_mille: 150),
+        AgeBand(min_age_years: 71, max_age_years: 90, weight_per_mille: 80),
+    ],
+    male_per_mille: 505,
+    household_min: 1,
+    household_max: 6,
+    // Expected crude annual death rate ≈ 14-22 per-mille for this pyramid
+    // and curve; the band leaves 3σ headroom at 10k citizens.
+    annual_death_rate_min_per_mille: 6,
+    annual_death_rate_max_per_mille: 40,
+)

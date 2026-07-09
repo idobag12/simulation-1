@@ -73,12 +73,14 @@ pub struct EngineConfig {
 
 /// All loaded data definitions. Grows as phases add content (goods,
 /// recipes, professions… — each in the phase that consumes it).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataDefs {
     /// Calendar tunables.
     pub calendar: CalendarConfig,
     /// Engine tunables.
     pub engine: EngineConfig,
+    /// People-simulation tunables and name lists (Phase 2, ADR 0005).
+    pub people: sim_people::config::PeopleConfig,
 }
 
 /// Loads and validates every data definition from a `data/` directory
@@ -87,8 +89,22 @@ pub struct DataDefs {
 pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
     let calendar: CalendarConfig = load_ron(&data_root.join("balance/calendar.ron"))?;
     let engine: EngineConfig = load_ron(&data_root.join("balance/engine.ron"))?;
+    let people = sim_people::config::PeopleConfig {
+        needs: load_ron(&data_root.join("balance/needs.ron"))?,
+        traits: load_ron(&data_root.join("balance/traits.ron"))?,
+        mortality: load_ron(&data_root.join("balance/mortality.ron"))?,
+        demographics: load_ron(&data_root.join("balance/demographics.ron"))?,
+        given_female: load_ron(&data_root.join("names/given_female.ron"))?,
+        given_male: load_ron(&data_root.join("names/given_male.ron"))?,
+        family: load_ron(&data_root.join("names/family.ron"))?,
+    };
     validate(data_root, &calendar, &engine)?;
-    Ok(DataDefs { calendar, engine })
+    validate_people(data_root, &people)?;
+    Ok(DataDefs {
+        calendar,
+        engine,
+        people,
+    })
 }
 
 fn load_ron<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, DataError> {
@@ -100,6 +116,118 @@ fn load_ron<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, DataError>
         path: path.to_path_buf(),
         message: e.to_string(),
     })
+}
+
+/// Validates the people configuration (SPEC §8: precise messages, no
+/// silent defaults). Split from `validate` to respect the 60-line rule.
+fn validate_people(
+    data_root: &Path,
+    people: &sim_people::config::PeopleConfig,
+) -> Result<(), DataError> {
+    let err = |file: &str, message: String| DataError::Validation {
+        path: data_root.join(file),
+        message,
+    };
+
+    for need in &people.needs.needs {
+        let range_ok = (0..=1_000_000).contains(&need.initial_min)
+            && (0..=1_000_000).contains(&need.initial_max)
+            && need.initial_min <= need.initial_max;
+        if !range_ok || need.decay_per_hour < 0 {
+            return Err(err(
+                "balance/needs.ron",
+                format!("need `{}` has an invalid range or negative decay", need.id),
+            ));
+        }
+    }
+    if people.needs.needs.is_empty() {
+        return Err(err(
+            "balance/needs.ron",
+            "at least one need required".into(),
+        ));
+    }
+
+    for t in &people.traits.traits {
+        if !(0..=1000).contains(&t.min) || !(0..=1000).contains(&t.max) || t.min > t.max {
+            return Err(err(
+                "balance/traits.ron",
+                format!(
+                    "trait `{}` range must satisfy 0 <= min <= max <= 1000",
+                    t.id
+                ),
+            ));
+        }
+    }
+
+    let mut previous_edge: Option<u32> = None;
+    for band in &people.mortality.bands {
+        if let Some(previous) = previous_edge
+            && band.max_age_years <= previous
+        {
+            return Err(err(
+                "balance/mortality.ron",
+                format!(
+                    "band edges must strictly ascend ({} after {previous})",
+                    band.max_age_years
+                ),
+            ));
+        }
+        previous_edge = Some(band.max_age_years);
+    }
+
+    let demographics = &people.demographics;
+    let weight_sum: u32 = demographics
+        .age_bands
+        .iter()
+        .map(|b| b.weight_per_mille)
+        .sum();
+    if weight_sum != 1000 {
+        return Err(err(
+            "balance/demographics.ron",
+            format!("age band weights must sum to 1000, got {weight_sum}"),
+        ));
+    }
+    for band in &demographics.age_bands {
+        if band.min_age_years > band.max_age_years {
+            return Err(err(
+                "balance/demographics.ron",
+                format!(
+                    "age band {}..{} is inverted",
+                    band.min_age_years, band.max_age_years
+                ),
+            ));
+        }
+    }
+    if demographics.male_per_mille > 1000 {
+        return Err(err(
+            "balance/demographics.ron",
+            "male_per_mille must be <= 1000".into(),
+        ));
+    }
+    if demographics.household_min == 0 || demographics.household_min > demographics.household_max {
+        return Err(err(
+            "balance/demographics.ron",
+            "household size range must satisfy 1 <= min <= max".into(),
+        ));
+    }
+    if demographics.annual_death_rate_min_per_mille >= demographics.annual_death_rate_max_per_mille
+    {
+        return Err(err(
+            "balance/demographics.ron",
+            "death-rate acceptance band must satisfy min < max".into(),
+        ));
+    }
+
+    for (file, list) in [
+        ("names/given_female.ron", &people.given_female),
+        ("names/given_male.ron", &people.given_male),
+        ("names/family.ron", &people.family),
+    ] {
+        if list.names.is_empty() {
+            return Err(err(file, "name list must not be empty".into()));
+        }
+    }
+    Ok(())
 }
 
 fn validate(
@@ -132,72 +260,105 @@ fn validate(
 mod tests {
     use super::*;
 
-    fn write_tree(files: &[(&str, &str)]) -> PathBuf {
-        // Unique per-test directory (thread id) under the target tmpdir.
+    const GOOD_CALENDAR: &str = "CalendarConfig(days_per_season: 30)";
+    const GOOD_ENGINE: &str = "EngineConfig(event_log_capacity: 4096)";
+    const GOOD_NEEDS: &str = r#"NeedsConfig(needs: [
+        NeedDef(id: "hunger", decay_per_hour: 14600, initial_min: 550000, initial_max: 1000000),
+    ])"#;
+    const GOOD_TRAITS: &str = r#"TraitsConfig(traits: [
+        TraitDef(id: "ambition", min: 20, max: 990),
+    ])"#;
+    const GOOD_MORTALITY: &str = r#"MortalityConfig(
+        bands: [MortalityBand(max_age_years: 60, per_day_chance_per_billion: 60000)],
+        terminal_per_day_chance_per_billion: 5000000,
+    )"#;
+    const GOOD_DEMOGRAPHICS: &str = r#"DemographicsConfig(
+        age_bands: [
+            AgeBand(min_age_years: 0, max_age_years: 40, weight_per_mille: 600),
+            AgeBand(min_age_years: 41, max_age_years: 90, weight_per_mille: 400),
+        ],
+        male_per_mille: 505,
+        household_min: 1,
+        household_max: 6,
+        annual_death_rate_min_per_mille: 6,
+        annual_death_rate_max_per_mille: 40,
+    )"#;
+    const GOOD_NAMES: &str = r#"NameList(names: ["A", "B"])"#;
+
+    /// Writes a fully valid data tree, then applies `overrides`
+    /// (path -> replacement content; empty content deletes the file).
+    fn write_tree(overrides: &[(&str, &str)]) -> PathBuf {
         let root = std::env::temp_dir()
             .join("embervale-data-defs-tests")
             .join(format!("{:?}", std::thread::current().id()));
         let _ = std::fs::remove_dir_all(&root);
-        for (rel, content) in files {
+        let base: &[(&str, &str)] = &[
+            ("balance/calendar.ron", GOOD_CALENDAR),
+            ("balance/engine.ron", GOOD_ENGINE),
+            ("balance/needs.ron", GOOD_NEEDS),
+            ("balance/traits.ron", GOOD_TRAITS),
+            ("balance/mortality.ron", GOOD_MORTALITY),
+            ("balance/demographics.ron", GOOD_DEMOGRAPHICS),
+            ("names/given_female.ron", GOOD_NAMES),
+            ("names/given_male.ron", GOOD_NAMES),
+            ("names/family.ron", GOOD_NAMES),
+        ];
+        for (rel, content) in base {
             let path = root.join(rel);
             std::fs::create_dir_all(path.parent().expect("has parent")).expect("mkdir");
             std::fs::write(path, content).expect("write");
         }
+        for (rel, content) in overrides {
+            let path = root.join(rel);
+            if content.is_empty() {
+                std::fs::remove_file(&path).expect("rm");
+            } else {
+                std::fs::write(path, content).expect("write");
+            }
+        }
         root
     }
 
-    const GOOD_CALENDAR: &str = "CalendarConfig(days_per_season: 30)";
-    const GOOD_ENGINE: &str = "EngineConfig(event_log_capacity: 4096)";
-
     #[test]
     fn valid_data_loads() {
-        let root = write_tree(&[
-            ("balance/calendar.ron", GOOD_CALENDAR),
-            ("balance/engine.ron", GOOD_ENGINE),
-        ]);
-        let defs = load(&root).expect("valid data must load");
+        let defs = load(&write_tree(&[])).expect("valid data must load");
         assert_eq!(defs.calendar.days_per_season, 30);
         assert_eq!(defs.engine.event_log_capacity, 4096);
+        assert_eq!(defs.people.needs.needs.len(), 1);
+        assert_eq!(defs.people.mortality.per_day_chance(61), 5_000_000);
     }
 
     #[test]
     fn missing_file_names_the_path() {
-        let root = write_tree(&[("balance/calendar.ron", GOOD_CALENDAR)]);
+        let root = write_tree(&[("balance/engine.ron", "")]);
         match load(&root) {
             Err(DataError::Io { path, .. }) => {
                 assert!(path.ends_with("balance/engine.ron"), "{path:?}");
             }
             other => panic!("expected Io error, got {other:?}"),
         }
+        let root = write_tree(&[("names/family.ron", "")]);
+        assert!(matches!(load(&root), Err(DataError::Io { .. })));
     }
 
     #[test]
     fn unknown_field_is_a_parse_error_not_a_silent_default() {
-        let root = write_tree(&[
-            (
-                "balance/calendar.ron",
-                "CalendarConfig(days_per_season: 30, dayz_per_saeson: 12)",
-            ),
-            ("balance/engine.ron", GOOD_ENGINE),
-        ]);
+        let root = write_tree(&[(
+            "balance/calendar.ron",
+            "CalendarConfig(days_per_season: 30, dayz_per_saeson: 12)",
+        )]);
         assert!(matches!(load(&root), Err(DataError::Parse { .. })));
     }
 
     #[test]
     fn syntax_error_is_a_parse_error() {
-        let root = write_tree(&[
-            ("balance/calendar.ron", "CalendarConfig(days_per_season:"),
-            ("balance/engine.ron", GOOD_ENGINE),
-        ]);
+        let root = write_tree(&[("balance/calendar.ron", "CalendarConfig(days_per_season:")]);
         assert!(matches!(load(&root), Err(DataError::Parse { .. })));
     }
 
     #[test]
     fn out_of_range_values_are_validation_errors_with_precise_messages() {
-        let root = write_tree(&[
-            ("balance/calendar.ron", "CalendarConfig(days_per_season: 0)"),
-            ("balance/engine.ron", GOOD_ENGINE),
-        ]);
+        let root = write_tree(&[("balance/calendar.ron", "CalendarConfig(days_per_season: 0)")]);
         match load(&root) {
             Err(DataError::Validation { message, .. }) => {
                 assert!(message.contains("days_per_season"), "{message}");
@@ -205,10 +366,59 @@ mod tests {
             other => panic!("expected Validation error, got {other:?}"),
         }
 
-        let root = write_tree(&[
-            ("balance/calendar.ron", GOOD_CALENDAR),
-            ("balance/engine.ron", "EngineConfig(event_log_capacity: 0)"),
-        ]);
+        let root = write_tree(&[("balance/engine.ron", "EngineConfig(event_log_capacity: 0)")]);
+        assert!(matches!(load(&root), Err(DataError::Validation { .. })));
+    }
+
+    #[test]
+    fn people_validation_catches_seeded_errors() {
+        // Age-band weights not summing to 1000.
+        let root = write_tree(&[(
+            "balance/demographics.ron",
+            r#"DemographicsConfig(
+                age_bands: [AgeBand(min_age_years: 0, max_age_years: 90, weight_per_mille: 900)],
+                male_per_mille: 505, household_min: 1, household_max: 6,
+                annual_death_rate_min_per_mille: 6, annual_death_rate_max_per_mille: 40,
+            )"#,
+        )]);
+        match load(&root) {
+            Err(DataError::Validation { message, .. }) => {
+                assert!(message.contains("sum to 1000"), "{message}");
+            }
+            other => panic!("expected Validation error, got {other:?}"),
+        }
+
+        // Non-ascending mortality bands.
+        let root = write_tree(&[(
+            "balance/mortality.ron",
+            r#"MortalityConfig(
+                bands: [
+                    MortalityBand(max_age_years: 60, per_day_chance_per_billion: 1),
+                    MortalityBand(max_age_years: 60, per_day_chance_per_billion: 2),
+                ],
+                terminal_per_day_chance_per_billion: 3,
+            )"#,
+        )]);
+        assert!(matches!(load(&root), Err(DataError::Validation { .. })));
+
+        // Inverted need range.
+        let root = write_tree(&[(
+            "balance/needs.ron",
+            r#"NeedsConfig(needs: [
+                NeedDef(id: "hunger", decay_per_hour: 1, initial_min: 900000, initial_max: 100000),
+            ])"#,
+        )]);
+        assert!(matches!(load(&root), Err(DataError::Validation { .. })));
+
+        // Empty name list.
+        let root = write_tree(&[("names/family.ron", "NameList(names: [])")]);
+        assert!(matches!(load(&root), Err(DataError::Validation { .. })));
+
+        // Trait range out of per-mille bounds.
+        let root = write_tree(&[(
+            "balance/traits.ron",
+            r#"TraitsConfig(traits: [TraitDef(id: "x", min: 500, max: 1500)])"#,
+        )]);
         assert!(matches!(load(&root), Err(DataError::Validation { .. })));
     }
 }

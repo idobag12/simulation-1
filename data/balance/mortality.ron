@@ -1,0 +1,13 @@
+// Deterministic mortality curve (ADR 0005 §4): daily death chance in
+// per-billion units by age band (world years; a world year is
+// 4 × days_per_season days). Bands are ascending and, with the terminal
+// rate, cover every age.
+MortalityConfig(
+    bands: [
+        MortalityBand(max_age_years: 40, per_day_chance_per_billion: 20000),
+        MortalityBand(max_age_years: 60, per_day_chance_per_billion: 60000),
+        MortalityBand(max_age_years: 75, per_day_chance_per_billion: 300000),
+        MortalityBand(max_age_years: 90, per_day_chance_per_billion: 1200000),
+    ],
+    terminal_per_day_chance_per_billion: 5000000,
+)

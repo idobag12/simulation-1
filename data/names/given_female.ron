@@ -1,0 +1,7 @@
+// Authored female given names.
+NameList(names: [
+    "Mara", "Elsbeth", "Wren", "Sable", "Ida", "Tamsin", "Rhoswen", "Cerys",
+    "Anwen", "Brida", "Sela", "Yola", "Nesta", "Perl", "Olwen", "Hedda",
+    "Isolde", "Ffion", "Rosalind", "Meryl", "Adela", "Bronwyn", "Cateline",
+    "Dilys", "Eluned", "Gwendolen", "Heulwen", "Iona", "Lowri", "Morwenna",
+])

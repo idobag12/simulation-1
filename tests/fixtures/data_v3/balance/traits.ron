@@ -1,0 +1,11 @@
+// Personality-trait definitions (SPEC §11). Weights are per-mille; genesis
+// samples uniformly in [min, max]. Order here IS the trait vector order.
+TraitsConfig(
+    traits: [
+        TraitDef(id: "industriousness", min: 100, max: 950),
+        TraitDef(id: "sociability",     min: 50,  max: 980),
+        TraitDef(id: "risk_tolerance",  min: 30,  max: 900),
+        TraitDef(id: "frugality",       min: 80,  max: 950),
+        TraitDef(id: "ambition",        min: 20,  max: 990),
+    ],
+)

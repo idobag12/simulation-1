@@ -3,15 +3,9 @@
 //! observability (its capacity cannot affect trajectories, ADR 0004 §5).
 
 use core_types::{Seed, Ticks};
+use embervale_tests::pinned_defs;
 use headless::fixture::FixtureAlarm;
-use headless::runner::{self, SimConfig, WorldSpec};
-
-/// Test-pinned world-assembly inputs (explicit test inputs, not hidden
-/// defaults).
-const CONFIG: SimConfig = SimConfig {
-    days_per_season: 30,
-    event_log_capacity: 4096,
-};
+use headless::runner::{self, WorldSpec};
 
 /// Steps `sim` for `ticks`, recording every delivered [`FixtureAlarm`] as
 /// `(tick, generation)`.
@@ -38,25 +32,27 @@ fn record_alarms(
 /// identical.
 #[test]
 fn scheduled_events_fire_deterministically_across_save_load() {
-    let spec = WorldSpec::fixture(Seed::new(21), 120, CONFIG);
+    let spec = WorldSpec::fixture(Seed::new(21), 120);
     let total = 600u64;
     let split = 250u64; // mid-chain: not a multiple of the alarm interval
 
     // Uninterrupted recording.
-    let (mut solid, mut solid_schedule) = runner::build_simulation(&spec).expect("build failed");
+    let (mut solid, mut solid_schedule) =
+        runner::build_simulation(&spec, &pinned_defs()).expect("build failed");
     let solid_log = record_alarms(&mut solid, &mut solid_schedule, total);
 
     // Interrupted recording.
-    let (mut first, mut first_schedule) = runner::build_simulation(&spec).expect("build failed");
+    let (mut first, mut first_schedule) =
+        runner::build_simulation(&spec, &pinned_defs()).expect("build failed");
     let mut interrupted_log = record_alarms(&mut first, &mut first_schedule, split);
     let save = persistence::save_to_bytes(&first).expect("save failed");
     let mut resumed = persistence::load_from_bytes(
         &save,
-        spec.load_config().expect("load config"),
+        runner::load_config(&pinned_defs()).expect("load config"),
         runner::register_world,
     )
     .expect("load failed");
-    let mut resumed_schedule = runner::build_schedule(&spec);
+    let mut resumed_schedule = runner::build_schedule(&spec, &pinned_defs());
     interrupted_log.extend(record_alarms(
         &mut resumed,
         &mut resumed_schedule,
@@ -81,25 +77,15 @@ fn scheduled_events_fire_deterministically_across_save_load() {
 /// legitimately differ — that is the ring bound working.)
 #[test]
 fn event_log_capacity_cannot_affect_trajectories() {
-    let small = WorldSpec::fixture(
-        Seed::new(5),
-        150,
-        SimConfig {
-            event_log_capacity: 8,
-            ..CONFIG
-        },
-    );
-    let large = WorldSpec::fixture(
-        Seed::new(5),
-        150,
-        SimConfig {
-            event_log_capacity: 4096,
-            ..CONFIG
-        },
-    );
+    let spec = WorldSpec::fixture(Seed::new(5), 150);
+    let mut small_defs = pinned_defs();
+    small_defs.engine.event_log_capacity = 8; // the varied test input
+    let large_defs = pinned_defs(); // capacity 4096 from the snapshot
 
-    let (mut sim_small, mut sched_small) = runner::build_simulation(&small).expect("build failed");
-    let (mut sim_large, mut sched_large) = runner::build_simulation(&large).expect("build failed");
+    let (mut sim_small, mut sched_small) =
+        runner::build_simulation(&spec, &small_defs).expect("build failed");
+    let (mut sim_large, mut sched_large) =
+        runner::build_simulation(&spec, &large_defs).expect("build failed");
     sim_small
         .run_ticks(&mut sched_small, 2_000)
         .expect("run failed");

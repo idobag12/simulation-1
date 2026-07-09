@@ -72,6 +72,15 @@ impl CommandBuffer {
         }));
     }
 
+    /// Queues an arbitrary deferred world mutation, for changes that are
+    /// not a plain insert/remove/despawn (e.g. editing another entity's
+    /// component in response to a death). Applied in queue order like
+    /// every command; the closure must be deterministic given world state
+    /// (it runs at the defined post-system point, SPEC §6).
+    pub fn run(&mut self, f: impl FnOnce(&mut World) -> Result<(), EcsError> + 'static) {
+        self.commands.push(Box::new(f));
+    }
+
     /// Applies all queued commands to `world` in queue order, draining the
     /// buffer. Called by the schedule after each system runs (SPEC §6).
     pub fn apply(&mut self, world: &mut World) -> Result<(), EcsError> {

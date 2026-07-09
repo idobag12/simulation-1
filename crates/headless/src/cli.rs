@@ -3,12 +3,15 @@
 //! (SPEC §16.5: no untested claims); `main.rs` is a thin shim over
 //! [`main_with_args`].
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use core_types::Seed;
+use data_defs::DataDefs;
 
-use crate::runner::{self, SimConfig, WorldSpec};
+use crate::inspect;
+use crate::runner::{self, WorldSpec};
 
 /// Exit code for a determinism mismatch (distinct from usage/runtime errors
 /// so scripts can tell them apart).
@@ -19,11 +22,16 @@ pub const EXIT_ERROR: u8 = 2;
 /// Usage text printed on errors.
 pub const USAGE: &str = "usage:
   embervale run --seed N --ticks N [--hash-interval N] [--fixture] [--entities N]
-                [--save PATH] [--load PATH] [--data DIR]
-  embervale verify --seed N --ticks N [--hash-interval N] [--fixture] [--entities N] [--data DIR]
-  embervale save-load-check --seed N --ticks N [--resume-at N] [--fixture] [--entities N] [--data DIR]
+                [--citizens N] [--save PATH] [--load PATH] [--stats-csv PATH] [--data DIR]
+  embervale verify --seed N --ticks N [--hash-interval N] [--fixture] [--entities N]
+                [--citizens N] [--data DIR]
+  embervale save-load-check --seed N --ticks N [--resume-at N] [--fixture] [--entities N]
+                [--citizens N] [--data DIR]
+  embervale inspect --load PATH --entity INDEX [--data DIR]
+  embervale demography --load PATH [--data DIR]
 
-defaults: --hash-interval 10000, --entities 200, --resume-at ticks/2, --data ./data";
+defaults: --hash-interval 10000, --entities 200, --citizens 0,
+          --resume-at ticks/2, --data ./data";
 
 /// Full CLI entry point: dispatches and maps the outcome to the exit-code
 /// contract — success ⇒ 0, determinism mismatch ⇒ [`EXIT_MISMATCH`],
@@ -53,6 +61,8 @@ pub fn dispatch(args: &[String]) -> Result<bool, String> {
         "run" => cmd_run(&flags),
         "verify" => cmd_verify(&flags),
         "save-load-check" => cmd_save_load_check(&flags),
+        "inspect" => cmd_inspect(&flags),
+        "demography" => cmd_demography(&flags),
         other => Err(format!("unknown subcommand `{other}`")),
     }
 }
@@ -64,9 +74,12 @@ struct Flags {
     hash_interval: u64,
     fixture: bool,
     entities: u32,
+    citizens: u32,
     resume_at: Option<u64>,
     save: Option<PathBuf>,
     load: Option<PathBuf>,
+    stats_csv: Option<PathBuf>,
+    entity: Option<u32>,
     data: PathBuf,
 }
 
@@ -78,9 +91,12 @@ impl Flags {
             hash_interval: 10_000,
             fixture: false,
             entities: 200,
+            citizens: 0,
             resume_at: None,
             save: None,
             load: None,
+            stats_csv: None,
+            entity: None,
             data: PathBuf::from("data"),
         };
         let mut iter = args.iter();
@@ -95,12 +111,15 @@ impl Flags {
                     flags.hash_interval = parse_num(value("--hash-interval")?, "--hash-interval")?;
                 }
                 "--entities" => flags.entities = parse_num(value("--entities")?, "--entities")?,
+                "--citizens" => flags.citizens = parse_num(value("--citizens")?, "--citizens")?,
                 "--resume-at" => {
                     flags.resume_at = Some(parse_num(value("--resume-at")?, "--resume-at")?);
                 }
+                "--entity" => flags.entity = Some(parse_num(value("--entity")?, "--entity")?),
                 "--fixture" => flags.fixture = true,
                 "--save" => flags.save = Some(PathBuf::from(value("--save")?)),
                 "--load" => flags.load = Some(PathBuf::from(value("--load")?)),
+                "--stats-csv" => flags.stats_csv = Some(PathBuf::from(value("--stats-csv")?)),
                 "--data" => flags.data = PathBuf::from(value("--data")?),
                 other => return Err(format!("unknown flag `{other}`")),
             }
@@ -110,23 +129,37 @@ impl Flags {
 
     /// Loads and validates the data definitions (SPEC §8: a data failure
     /// is a startup error with a precise message).
-    fn sim_config(&self) -> Result<SimConfig, String> {
-        let defs = data_defs::load(&self.data).map_err(|e| e.to_string())?;
-        Ok(SimConfig::from_data(&defs))
+    fn defs(&self) -> Result<DataDefs, String> {
+        data_defs::load(&self.data).map_err(|e| e.to_string())
     }
 
     fn spec(&self) -> Result<WorldSpec, String> {
-        let seed = Seed::new(self.seed.ok_or("--seed is required")?);
-        let config = self.sim_config()?;
-        Ok(if self.fixture {
-            WorldSpec::fixture(seed, self.entities, config)
-        } else {
-            WorldSpec::empty(seed, config)
+        Ok(WorldSpec {
+            seed: Seed::new(self.seed.ok_or("--seed is required")?),
+            fixture: self.fixture,
+            fixture_entities: self.entities,
+            citizens: self.citizens,
         })
+    }
+
+    /// The spec used only for schedule reconstruction on `--load` (the
+    /// seed comes from the save, so a placeholder is fine here — the
+    /// schedule depends only on the fixture/citizens flags).
+    fn schedule_spec(&self) -> WorldSpec {
+        WorldSpec {
+            seed: Seed::new(0),
+            fixture: self.fixture,
+            fixture_entities: self.entities,
+            citizens: self.citizens,
+        }
     }
 
     fn ticks(&self) -> Result<u64, String> {
         self.ticks.ok_or("--ticks is required".into())
+    }
+
+    fn load_path(&self) -> Result<&PathBuf, String> {
+        self.load.as_ref().ok_or("--load is required".into())
     }
 }
 
@@ -135,30 +168,32 @@ fn parse_num<T: std::str::FromStr>(raw: &str, flag: &str) -> Result<T, String> {
         .map_err(|_| format!("{flag}: `{raw}` is not a valid number"))
 }
 
+fn load_sim(flags: &Flags, defs: &DataDefs) -> Result<sim_time::Simulation, String> {
+    let load_config = runner::load_config(defs).map_err(|e| e.to_string())?;
+    persistence::load_from_file(flags.load_path()?, load_config, runner::register_world)
+        .map_err(|e| e.to_string())
+}
+
 fn cmd_run(flags: &Flags) -> Result<bool, String> {
     let ticks = flags.ticks()?;
+    let defs = flags.defs()?;
     let (mut sim, mut schedule) = match &flags.load {
-        Some(path) => {
-            // The schedule, calendar, and log capacity are reconstructed
-            // from flags + data files, exactly like registrations (they are
-            // not part of saved state); the seed comes from the save, so
-            // --seed is not consulted here.
-            let config = flags.sim_config()?;
-            let schedule_spec = if flags.fixture {
-                WorldSpec::fixture(Seed::new(0), flags.entities, config)
-            } else {
-                WorldSpec::empty(Seed::new(0), config)
-            };
-            let load_config = schedule_spec.load_config().map_err(|e| e.to_string())?;
-            let sim = persistence::load_from_file(path, load_config, runner::register_world)
-                .map_err(|e| e.to_string())?;
-            (sim, runner::build_schedule(&schedule_spec))
+        Some(_) => {
+            // Schedule/calendar/log-capacity are reconstructed from flags +
+            // data files, exactly like registrations; the seed comes from
+            // the save, so --seed is not consulted here.
+            let sim = load_sim(flags, &defs)?;
+            let schedule = runner::build_schedule(&flags.schedule_spec(), &defs);
+            (sim, schedule)
         }
-        None => runner::build_simulation(&flags.spec()?).map_err(|e| e.to_string())?,
+        None => runner::build_simulation(&flags.spec()?, &defs).map_err(|e| e.to_string())?,
     };
 
-    let hashes = runner::run_with_hashes(&mut sim, &mut schedule, ticks, flags.hash_interval)
-        .map_err(|e| e.to_string())?;
+    let hashes = match &flags.stats_csv {
+        Some(path) => run_with_stats(&mut sim, &mut schedule, ticks, flags.hash_interval, path)?,
+        None => runner::run_with_hashes(&mut sim, &mut schedule, ticks, flags.hash_interval)
+            .map_err(|e| e.to_string())?,
+    };
     println!("tick,hash");
     for (tick, hash) in &hashes {
         println!("{tick},{hash}");
@@ -171,10 +206,50 @@ fn cmd_run(flags: &Flags) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Like `runner::run_with_hashes`, additionally appending one CSV row per
+/// simulated day: `tick,population,deaths_total` (SPEC §13 time-series;
+/// ADR 0005 §7). Death counting observes `PersonDied` events from outside
+/// the simulation — an observer, not a system.
+fn run_with_stats(
+    sim: &mut sim_time::Simulation,
+    schedule: &mut core_ecs::Schedule,
+    ticks: u64,
+    hash_interval: u64,
+    csv_path: &std::path::Path,
+) -> Result<runner::HashSequence, String> {
+    let mut csv = std::fs::File::create(csv_path).map_err(|e| e.to_string())?;
+    writeln!(csv, "tick,population,deaths_total").map_err(|e| e.to_string())?;
+    let mut deaths_total: u64 = 0;
+    let mut hashes = Vec::new();
+    for _ in 0..ticks {
+        if hash_interval != 0 && sim.tick().raw().is_multiple_of(hash_interval) {
+            hashes.push((sim.tick(), sim.state_hash().map_err(|e| e.to_string())?));
+        }
+        sim.step(schedule).map_err(|e| e.to_string())?;
+        deaths_total += sim
+            .world()
+            .events::<sim_people::PersonDied>()
+            .map_err(|e| e.to_string())?
+            .len() as u64;
+        if sim
+            .tick()
+            .raw()
+            .is_multiple_of(core_types::calendar::TICKS_PER_DAY)
+        {
+            let population = inspect::population(sim.world()).map_err(|e| e.to_string())?;
+            writeln!(csv, "{},{population},{deaths_total}", sim.tick())
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    hashes.push((sim.tick(), sim.state_hash().map_err(|e| e.to_string())?));
+    Ok(hashes)
+}
+
 fn cmd_verify(flags: &Flags) -> Result<bool, String> {
     let spec = flags.spec()?;
+    let defs = flags.defs()?;
     let ticks = flags.ticks()?;
-    let (a, b) = runner::verify_two_fresh_runs(&spec, ticks, flags.hash_interval)
+    let (a, b) = runner::verify_two_fresh_runs(&spec, &defs, ticks, flags.hash_interval)
         .map_err(|e| e.to_string())?;
     if a == b {
         println!(
@@ -197,6 +272,7 @@ fn cmd_verify(flags: &Flags) -> Result<bool, String> {
 
 fn cmd_save_load_check(flags: &Flags) -> Result<bool, String> {
     let spec = flags.spec()?;
+    let defs = flags.defs()?;
     let ticks = flags.ticks()?;
     let resume_at = flags.resume_at.unwrap_or(ticks / 2);
     if resume_at > ticks {
@@ -205,7 +281,7 @@ fn cmd_save_load_check(flags: &Flags) -> Result<bool, String> {
 
     // Uninterrupted run.
     let (mut solid, mut solid_schedule) =
-        runner::build_simulation(&spec).map_err(|e| e.to_string())?;
+        runner::build_simulation(&spec, &defs).map_err(|e| e.to_string())?;
     solid
         .run_ticks(&mut solid_schedule, ticks)
         .map_err(|e| e.to_string())?;
@@ -213,15 +289,15 @@ fn cmd_save_load_check(flags: &Flags) -> Result<bool, String> {
 
     // Save at `resume_at`, load, resume to the end.
     let (mut first, mut first_schedule) =
-        runner::build_simulation(&spec).map_err(|e| e.to_string())?;
+        runner::build_simulation(&spec, &defs).map_err(|e| e.to_string())?;
     first
         .run_ticks(&mut first_schedule, resume_at)
         .map_err(|e| e.to_string())?;
     let save = persistence::save_to_bytes(&first).map_err(|e| e.to_string())?;
-    let load_config = spec.load_config().map_err(|e| e.to_string())?;
+    let load_config = runner::load_config(&defs).map_err(|e| e.to_string())?;
     let mut resumed = persistence::load_from_bytes(&save, load_config, runner::register_world)
         .map_err(|e| e.to_string())?;
-    let mut resumed_schedule = runner::build_schedule(&spec);
+    let mut resumed_schedule = runner::build_schedule(&spec, &defs);
     resumed
         .run_ticks(&mut resumed_schedule, ticks - resume_at)
         .map_err(|e| e.to_string())?;
@@ -236,6 +312,21 @@ fn cmd_save_load_check(flags: &Flags) -> Result<bool, String> {
         println!("FAIL: uninterrupted {solid_hash} != save/load/resume {resumed_hash}");
         Ok(false)
     }
+}
+
+fn cmd_inspect(flags: &Flags) -> Result<bool, String> {
+    let defs = flags.defs()?;
+    let sim = load_sim(flags, &defs)?;
+    let index = flags.entity.ok_or("--entity is required")?;
+    print!("{}", inspect::inspect_entity(&sim, &defs, index)?);
+    Ok(true)
+}
+
+fn cmd_demography(flags: &Flags) -> Result<bool, String> {
+    let defs = flags.defs()?;
+    let sim = load_sim(flags, &defs)?;
+    print!("{}", inspect::demography(&sim, &defs)?);
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -263,9 +354,8 @@ mod tests {
         assert!(dispatch(&args(&["run", "--seed", "abc", "--ticks", "1"])).is_err());
         assert!(dispatch(&args(&["run", "--ticks", "1"])).is_err()); // seed required
         assert!(dispatch(&args(&["verify", "--seed", "1"])).is_err()); // ticks required
-        // A value-less flag at the end swallows "--data", then the final
-        // path is left as a dangling flag — still a usage error.
-        assert!(dispatch(&args(&["run", "--seed"])).is_err());
+        assert!(dispatch(&args(&["run", "--seed"])).is_err()); // dangling value
+        assert!(dispatch(&args(&["inspect", "--entity", "0"])).is_err()); // load required
     }
 
     #[test]
@@ -300,17 +390,19 @@ mod tests {
     }
 
     #[test]
-    fn verify_and_save_load_check_pass_on_a_deterministic_world() {
+    fn verify_and_save_load_check_pass_with_citizens_and_fixture() {
         assert_eq!(
             dispatch(&args(&[
                 "verify",
                 "--seed",
                 "5",
                 "--ticks",
-                "2000",
+                "3000",
                 "--fixture",
                 "--entities",
                 "50",
+                "--citizens",
+                "120",
                 "--hash-interval",
                 "500",
             ])),
@@ -322,21 +414,22 @@ mod tests {
                 "--seed",
                 "5",
                 "--ticks",
-                "2000",
-                "--fixture",
-                "--entities",
-                "50",
+                "3000",
+                "--citizens",
+                "120",
             ])),
             Ok(true)
         );
     }
 
     #[test]
-    fn run_save_then_load_resumes_identically() {
+    fn run_save_inspect_demography_round_trip() {
         let dir = std::env::temp_dir().join("embervale-cli-test");
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("roundtrip.embersave");
+        let path = dir.join("town.embersave");
         let path_str = path.to_str().unwrap();
+        let csv = dir.join("stats.csv");
+        let csv_str = csv.to_str().unwrap();
 
         assert_eq!(
             dispatch(&args(&[
@@ -344,28 +437,37 @@ mod tests {
                 "--seed",
                 "9",
                 "--ticks",
-                "1000",
-                "--fixture",
-                "--entities",
-                "50",
+                "3000",
+                "--citizens",
+                "150",
                 "--save",
                 path_str,
+                "--stats-csv",
+                csv_str,
             ])),
+            Ok(true)
+        );
+        // Stats CSV has a header + at least two day rows (3000 ticks > 2 days).
+        let stats = std::fs::read_to_string(&csv).unwrap();
+        assert!(stats.starts_with("tick,population,deaths_total"));
+        assert!(stats.lines().count() >= 3, "{stats}");
+
+        assert_eq!(
+            dispatch(&args(&["demography", "--load", path_str])),
+            Ok(true)
+        );
+        // Inspect the first live entity (a household or citizen exists at
+        // some low index; index 0 is the first genesis household).
+        assert_eq!(
+            dispatch(&args(&["inspect", "--load", path_str, "--entity", "0"])),
             Ok(true)
         );
         assert_eq!(
-            dispatch(&args(&[
-                "run",
-                "--load",
-                path_str,
-                "--ticks",
-                "1000",
-                "--fixture",
-                "--entities",
-                "50",
-            ])),
+            dispatch(&args(&["inspect", "--load", path_str, "--entity", "1"])),
             Ok(true)
         );
+
         std::fs::remove_file(&path).ok();
+        std::fs::remove_file(&csv).ok();
     }
 }

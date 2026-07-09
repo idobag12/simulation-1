@@ -100,6 +100,7 @@ version = "0.1.0"
 dependencies = [
  "ron",
  "serde",
+ "sim_people",
  "thiserror",
 ]
 
@@ -114,9 +115,11 @@ dependencies = [
  "core_ecs",
  "core_rng",
  "core_types",
+ "data_defs",
  "headless",
  "persistence",
  "serde",
+ "sim_people",
  "sim_time",
 ]
 
@@ -147,6 +150,7 @@ dependencies = [
  "data_defs",
  "persistence",
  "serde",
+ "sim_people",
  "sim_time",
  "thiserror",
 ]
@@ -172,6 +176,7 @@ name = "persistence"
 version = "0.1.0"
 dependencies = [
  "core_ecs",
+ "core_events",
  "core_rng",
  "core_types",
  "serde",
@@ -294,6 +299,13 @@ version = "0.1.0"
 [[package]]
 name = "sim_people"
 version = "0.1.0"
+dependencies = [
+ "core_ecs",
+ "core_rng",
+ "core_types",
+ "serde",
+ "thiserror",
+]
 
 [[package]]
 name = "sim_time"

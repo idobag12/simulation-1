@@ -34,8 +34,11 @@ use thiserror::Error;
 
 /// Current save format version. Bumping this requires a migration in
 /// [`migrations`] and a compatibility test that loads the previous version.
-/// History: v1 = Phase 0 (no event state); v2 = Phase 1 (+ event state).
-pub const FORMAT_VERSION: u32 = 2;
+/// History: v1 = Phase 0 (no event state); v2 = Phase 1 (+ event state);
+/// v3 = Phase 2 (registration grew by the people components/events —
+/// ADR 0005 §9: appending registrations is a format bump with a
+/// list-extension migration).
+pub const FORMAT_VERSION: u32 = 3;
 
 /// 8-byte file magic identifying an Embervale save.
 pub const MAGIC: &[u8; 8] = b"EMBRSAV1";

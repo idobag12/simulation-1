@@ -6,40 +6,42 @@
 //! must ship a migration that makes it pass again. Regenerating a fixture
 //! to make a red test green is forbidden without that migration.
 //!
+//! These suites load the FROZEN data snapshot (`fixtures/data_v3/`), never
+//! the live `data/` directory, so balance edits cannot shift the goldens.
+//!
 //! Golden-hash policy (ADR 0004 §10): when a phase legitimately extends
-//! the hash domain (e.g. Phase 1 added event state), the same commit
-//! re-records the goldens, says why, and proves content continuity (the
-//! persistence unit test `v1_fixture_content_survives_migration_verbatim`
-//! checks the migrated v1 component/entity/RNG bytes byte-for-byte).
+//! the hash domain or the registration set, the same commit re-records the
+//! goldens, says why, and proves content continuity (the persistence unit
+//! test `v1_fixture_content_survives_migration_verbatim` checks migrated
+//! bytes byte-for-byte). History: re-recorded in Phase 1 (event state
+//! joined the hash) and Phase 2 (registration grew by the people set,
+//! format v3 — ADR 0005 §9).
 
 use core_types::{Seed, Ticks, WorldHash};
-use headless::runner::{self, SimConfig, WorldSpec};
+use embervale_tests::pinned_defs;
+use headless::runner::{self, WorldSpec};
 use persistence::LoadConfig;
 
-/// Test-pinned world-assembly inputs matching the fixtures' generation.
-const CONFIG: SimConfig = SimConfig {
-    days_per_season: 30,
-    event_log_capacity: 4096,
-};
-
 fn load_config() -> LoadConfig {
-    WorldSpec::empty(Seed::new(0), CONFIG)
-        .load_config()
-        .expect("static test config")
+    runner::load_config(&pinned_defs()).expect("static snapshot config")
 }
 
-// --- v1 (Phase 0: no event state; loads through the v1→v2 migration) ----
+/// Resume schedule for a fixture-only save (fixture systems; no citizens).
+fn fixture_schedule() -> core_ecs::Schedule {
+    runner::build_schedule(&WorldSpec::fixture(Seed::new(0), 0), &pinned_defs())
+}
+
+// --- v1 (Phase 0: no event state; migrates v1→v2→v3) --------------------
 
 /// Committed v1 fixture: seed 7, 50 fixture entities, 1,000 ticks (Phase 0).
 const V1_FIXTURE: &[u8] = include_bytes!("../fixtures/v1_seed7_fixture50_tick1000.embersave");
 
-/// Golden hash of the migrated v1 fixture at load (re-recorded in Phase 1
-/// when event state joined the hash domain, ADR 0004 §10).
-const V1_GOLDEN_HASH_AT_LOAD: u64 = 0x6d7e_d624_8e74_2d3c;
+/// Golden hash of the migrated v1 fixture at load (re-recorded Phase 2:
+/// registration grew, ADR 0005 §9).
+const V1_GOLDEN_HASH_AT_LOAD: u64 = 0x03ca_efc5_08ca_848a;
 
-/// Golden hash after resuming the migrated v1 world 100 ticks under the
-/// Phase 1 schedule.
-const V1_GOLDEN_HASH_AFTER_100: u64 = 0x6756_ae2f_f8bf_ff64;
+/// Golden hash after resuming the migrated v1 world 100 ticks.
+const V1_GOLDEN_HASH_AFTER_100: u64 = 0x3e8e_ca13_31ce_25f2;
 
 #[test]
 fn v1_golden_save_loads_through_migration_to_the_golden_state() {
@@ -63,30 +65,30 @@ fn v1_golden_save_loads_through_migration_to_the_golden_state() {
 fn v1_golden_save_resumes_deterministically() {
     let mut sim = persistence::load_from_bytes(V1_FIXTURE, load_config(), runner::register_world)
         .expect("committed v1 save no longer loads");
-    let mut schedule = runner::build_schedule(&WorldSpec::fixture(sim.seed(), 0, CONFIG));
-    sim.run_ticks(&mut schedule, 100).expect("resume failed");
+    sim.run_ticks(&mut fixture_schedule(), 100)
+        .expect("resume failed");
     assert_eq!(
         sim.state_hash().expect("hash failed"),
         WorldHash::new(V1_GOLDEN_HASH_AFTER_100),
-        "resumed evolution diverged from the Phase 1 recording"
+        "resumed evolution diverged from the recording"
     );
 }
 
-// --- v2 (Phase 1: live event state — queues, log ring, alarm chain) -----
+// --- v2 (Phase 1: live event state; migrates v2→v3) ---------------------
 
 /// Committed v2 fixture: seed 13, 60 fixture entities, 2,000 ticks, saved
 /// mid-flight with pending emissions, a populated log ring, and live
 /// scheduled alarms.
 const V2_FIXTURE: &[u8] = include_bytes!("../fixtures/v2_seed13_fixture60_tick2000.embersave");
 
-/// Golden hash of the v2 fixture at load.
-const V2_GOLDEN_HASH_AT_LOAD: u64 = 0xea67_696f_86d8_c4ff;
+/// Golden hash of the migrated v2 fixture at load (re-recorded Phase 2).
+const V2_GOLDEN_HASH_AT_LOAD: u64 = 0x1901_f482_7918_6bd9;
 
-/// Golden hash after resuming the v2 fixture 100 ticks.
-const V2_GOLDEN_HASH_AFTER_100: u64 = 0x6784_51de_60a9_2f25;
+/// Golden hash after resuming the migrated v2 fixture 100 ticks.
+const V2_GOLDEN_HASH_AFTER_100: u64 = 0x9146_9e4d_1a3d_e0ca;
 
 #[test]
-fn v2_golden_save_loads_to_the_exact_golden_state() {
+fn v2_golden_save_loads_through_migration_to_the_golden_state() {
     let sim = persistence::load_from_bytes(V2_FIXTURE, load_config(), runner::register_world)
         .expect("committed v2 save no longer loads: save-format break without a migration");
     assert_eq!(sim.tick(), Ticks::new(2000));
@@ -98,7 +100,7 @@ fn v2_golden_save_loads_to_the_exact_golden_state() {
     assert_eq!(
         sim.state_hash().expect("hash failed"),
         WorldHash::new(V2_GOLDEN_HASH_AT_LOAD),
-        "loaded v2 state differs from the state that was saved"
+        "migrated v2 state differs from the recorded golden"
     );
 }
 
@@ -106,11 +108,58 @@ fn v2_golden_save_loads_to_the_exact_golden_state() {
 fn v2_golden_save_resumes_deterministically() {
     let mut sim = persistence::load_from_bytes(V2_FIXTURE, load_config(), runner::register_world)
         .expect("committed v2 save no longer loads");
-    let mut schedule = runner::build_schedule(&WorldSpec::fixture(sim.seed(), 0, CONFIG));
-    sim.run_ticks(&mut schedule, 100).expect("resume failed");
+    sim.run_ticks(&mut fixture_schedule(), 100)
+        .expect("resume failed");
     assert_eq!(
         sim.state_hash().expect("hash failed"),
         WorldHash::new(V2_GOLDEN_HASH_AFTER_100),
-        "resumed evolution diverged from the Phase 1 recording"
+        "resumed evolution diverged from the recording"
+    );
+}
+
+// --- v3 (Phase 2: citizens — identities, needs, households, deaths) -----
+
+/// Committed v3 fixture: seed 17, 40 fixture entities + 300 citizens,
+/// 3,000 ticks (2+ days: needs decayed, mortality has run), saved
+/// mid-flight with live event and scheduler state.
+const V3_FIXTURE: &[u8] =
+    include_bytes!("../fixtures/v3_seed17_fixture40_citizens300_tick3000.embersave");
+
+/// Golden hash of the v3 fixture at load.
+const V3_GOLDEN_HASH_AT_LOAD: u64 = 0x600d_e7e6_0b0b_67a2;
+
+/// Golden hash after resuming the v3 fixture 1,500 ticks (crossing a day
+/// boundary so mortality and needs decay both run again).
+const V3_GOLDEN_HASH_AFTER_1500: u64 = 0xc915_a333_cdd8_635c;
+
+#[test]
+fn v3_golden_save_loads_to_the_exact_golden_state() {
+    let sim = persistence::load_from_bytes(V3_FIXTURE, load_config(), runner::register_world)
+        .expect("committed v3 save no longer loads: save-format break without a migration");
+    assert_eq!(sim.tick(), Ticks::new(3000));
+    assert_eq!(sim.seed(), Seed::new(17));
+    let citizens = headless::inspect::population(sim.world()).expect("count failed");
+    assert!(citizens > 0, "the v3 fixture contains a town");
+    assert_eq!(
+        sim.state_hash().expect("hash failed"),
+        WorldHash::new(V3_GOLDEN_HASH_AT_LOAD),
+        "loaded v3 state differs from the state that was saved"
+    );
+}
+
+#[test]
+fn v3_golden_save_resumes_deterministically() {
+    let mut sim = persistence::load_from_bytes(V3_FIXTURE, load_config(), runner::register_world)
+        .expect("committed v3 save no longer loads");
+    let spec = WorldSpec {
+        citizens: 300,
+        ..WorldSpec::fixture(sim.seed(), 0)
+    };
+    let mut schedule = runner::build_schedule(&spec, &pinned_defs());
+    sim.run_ticks(&mut schedule, 1_500).expect("resume failed");
+    assert_eq!(
+        sim.state_hash().expect("hash failed"),
+        WorldHash::new(V3_GOLDEN_HASH_AFTER_1500),
+        "resumed evolution diverged from the recording"
     );
 }

@@ -6,22 +6,16 @@
 //!     external-input path exists; with no inputs, a replay is exactly (a).
 
 use core_types::Seed;
-use headless::runner::{self, SimConfig, WorldSpec};
-
-/// Test-pinned world-assembly inputs (explicit test inputs, not hidden
-/// defaults): 30-day seasons, event log ring of 4096.
-const CONFIG: SimConfig = SimConfig {
-    days_per_season: 30,
-    event_log_capacity: 4096,
-};
+use embervale_tests::pinned_defs;
+use headless::runner::{self, WorldSpec};
 
 /// SPEC Phase 0 exit criterion: two runs of 1M empty ticks hash-identical,
 /// checked every 10k ticks (SPEC §9).
 #[test]
 fn two_fresh_empty_runs_of_one_million_ticks_are_hash_identical() {
-    let spec = WorldSpec::empty(Seed::new(0xE58E), CONFIG);
-    let (a, b) =
-        runner::verify_two_fresh_runs(&spec, 1_000_000, 10_000).expect("empty runs cannot fail");
+    let spec = WorldSpec::empty(Seed::new(0xE58E));
+    let (a, b) = runner::verify_two_fresh_runs(&spec, &pinned_defs(), 1_000_000, 10_000)
+        .expect("empty runs cannot fail");
     assert_eq!(a.len(), 101, "100 interval checkpoints + final");
     assert_eq!(a, b, "empty-world runs diverged");
     // Sanity: the hash actually observes time passing.
@@ -30,11 +24,16 @@ fn two_fresh_empty_runs_of_one_million_ticks_are_hash_identical() {
 
 /// Determinism (a) with real state churn: components mutating, entities
 /// spawning/despawning, RNG streams advancing, events emitted and
-/// scheduled every tick (the Phase 0/1 fixture).
+/// scheduled every tick (fixture), plus a living town (needs decay,
+/// mortality) so every Phase 2 system is inside the comparison.
 #[test]
 fn two_fresh_fixture_runs_are_hash_identical() {
-    let spec = WorldSpec::fixture(Seed::new(42), 200, CONFIG);
-    let (a, b) = runner::verify_two_fresh_runs(&spec, 50_000, 5_000).expect("fixture run failed");
+    let spec = WorldSpec {
+        citizens: 300,
+        ..WorldSpec::fixture(Seed::new(42), 200)
+    };
+    let (a, b) = runner::verify_two_fresh_runs(&spec, &pinned_defs(), 50_000, 5_000)
+        .expect("fixture run failed");
     assert_eq!(a, b, "fixture runs diverged");
     // Sanity: state is actually evolving between checkpoints.
     assert_ne!(a[3].1, a[4].1);
@@ -43,12 +42,20 @@ fn two_fresh_fixture_runs_are_hash_identical() {
 /// Different seeds must diverge (otherwise the hash observes nothing).
 #[test]
 fn different_seeds_produce_different_trajectories() {
-    let (a, _) =
-        runner::verify_two_fresh_runs(&WorldSpec::fixture(Seed::new(1), 200, CONFIG), 2_000, 1_000)
-            .expect("run failed");
-    let (b, _) =
-        runner::verify_two_fresh_runs(&WorldSpec::fixture(Seed::new(2), 200, CONFIG), 2_000, 1_000)
-            .expect("run failed");
+    let (a, _) = runner::verify_two_fresh_runs(
+        &WorldSpec::fixture(Seed::new(1), 200),
+        &pinned_defs(),
+        2_000,
+        1_000,
+    )
+    .expect("run failed");
+    let (b, _) = runner::verify_two_fresh_runs(
+        &WorldSpec::fixture(Seed::new(2), 200),
+        &pinned_defs(),
+        2_000,
+        1_000,
+    )
+    .expect("run failed");
     assert_ne!(a.last(), b.last());
 }
 
@@ -59,18 +66,23 @@ fn different_seeds_produce_different_trajectories() {
 /// populated — all of it must survive the round-trip exactly (SPEC §9).
 #[test]
 fn save_load_continue_matches_uninterrupted_run() {
-    let spec = WorldSpec::fixture(Seed::new(7), 200, CONFIG);
+    let spec = WorldSpec {
+        citizens: 300,
+        ..WorldSpec::fixture(Seed::new(7), 200)
+    };
     let total_ticks = 20_000;
     let save_at = 10_000;
 
     // Uninterrupted run.
-    let (mut solid, mut solid_schedule) = runner::build_simulation(&spec).expect("build failed");
+    let (mut solid, mut solid_schedule) =
+        runner::build_simulation(&spec, &pinned_defs()).expect("build failed");
     solid
         .run_ticks(&mut solid_schedule, total_ticks)
         .expect("run failed");
 
     // Interrupted run: save at `save_at`, load, resume.
-    let (mut first, mut first_schedule) = runner::build_simulation(&spec).expect("build failed");
+    let (mut first, mut first_schedule) =
+        runner::build_simulation(&spec, &pinned_defs()).expect("build failed");
     first
         .run_ticks(&mut first_schedule, save_at)
         .expect("run failed");
@@ -80,7 +92,7 @@ fn save_load_continue_matches_uninterrupted_run() {
     );
     let save = persistence::save_to_bytes(&first).expect("save failed");
 
-    let load_config = spec.load_config().expect("load config");
+    let load_config = runner::load_config(&pinned_defs()).expect("load config");
     let mut resumed = persistence::load_from_bytes(&save, load_config, runner::register_world)
         .expect("load failed");
     assert_eq!(
@@ -89,7 +101,7 @@ fn save_load_continue_matches_uninterrupted_run() {
         "loading a save must reproduce the exact saved state"
     );
 
-    let mut resumed_schedule = runner::build_schedule(&spec);
+    let mut resumed_schedule = runner::build_schedule(&spec, &pinned_defs());
     resumed
         .run_ticks(&mut resumed_schedule, total_ticks - save_at)
         .expect("resume failed");
@@ -114,12 +126,13 @@ fn save_load_continue_matches_uninterrupted_run() {
 fn save_load_preserves_rng_stream_positions() {
     use core_rng::RngCore;
 
-    let spec = WorldSpec::fixture(Seed::new(11), 150, CONFIG);
-    let (mut sim, mut schedule) = runner::build_simulation(&spec).expect("build failed");
+    let spec = WorldSpec::fixture(Seed::new(11), 150);
+    let (mut sim, mut schedule) =
+        runner::build_simulation(&spec, &pinned_defs()).expect("build failed");
     sim.run_ticks(&mut schedule, 1_000).expect("run failed");
 
     let save = persistence::save_to_bytes(&sim).expect("save failed");
-    let load_config = spec.load_config().expect("load config");
+    let load_config = runner::load_config(&pinned_defs()).expect("load config");
     let mut loaded = persistence::load_from_bytes(&save, load_config, runner::register_world)
         .expect("load failed");
 
@@ -159,8 +172,9 @@ fn save_load_preserves_rng_stream_positions() {
 /// so the suite's state churn cannot silently die out or explode.
 #[test]
 fn fixture_population_stays_bounded_and_churning() {
-    let spec = WorldSpec::fixture(Seed::new(3), 200, CONFIG);
-    let (mut sim, mut schedule) = runner::build_simulation(&spec).expect("build failed");
+    let spec = WorldSpec::fixture(Seed::new(3), 200);
+    let (mut sim, mut schedule) =
+        runner::build_simulation(&spec, &pinned_defs()).expect("build failed");
     let initial = sim.world().entity_count();
     sim.run_ticks(&mut schedule, 20_000).expect("run failed");
     let population = sim.world().entity_count();
