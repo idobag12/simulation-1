@@ -92,6 +92,99 @@ fn citizen_report(
             }
         }
     }
+    out.push_str(&activity_report(world, defs, entity)?);
+    Ok(out)
+}
+
+/// Resolves a location entity to `"kind #index"` for display.
+fn location_label(world: &World, defs: &DataDefs, location: Entity) -> Result<String, String> {
+    let kind_name = world
+        .get::<core_ecs::sim_interface::Location>(location)
+        .map_err(err)?
+        .and_then(|l| defs.locations.kinds.get(l.kind as usize))
+        .map(|k| k.id.clone())
+        .unwrap_or_else(|| "<not a location>".into());
+    Ok(format!("{kind_name} #{}", location.index()))
+}
+
+fn need_name(defs: &DataDefs, need_index: u32) -> &str {
+    defs.people
+        .needs
+        .needs
+        .get(need_index as usize)
+        .map(|n| n.id.as_str())
+        .unwrap_or("<unknown need>")
+}
+
+/// The AI section of a citizen dump: position, current action, and the
+/// full scored candidate list of the last decision (SPEC §11/§13 — every
+/// Tier A decision inspectable from a save).
+fn activity_report(world: &World, defs: &DataDefs, entity: Entity) -> Result<String, String> {
+    let mut out = String::new();
+    if let Some(position) = world
+        .get::<core_ecs::sim_interface::Position>(entity)
+        .map_err(err)?
+    {
+        out.push_str(&format!(
+            "at: {}\n",
+            location_label(world, defs, position.at)?
+        ));
+    }
+    if let Some(action) = world.get::<sim_ai::CurrentAction>(entity).map_err(err)? {
+        let line = match action {
+            sim_ai::CurrentAction::Travel {
+                target,
+                need_index,
+                remaining,
+            } => format!(
+                "doing: traveling to {} for {} ({remaining} ticks left)\n",
+                location_label(world, defs, *target)?,
+                need_name(defs, *need_index),
+            ),
+            sim_ai::CurrentAction::Perform {
+                at,
+                need_index,
+                remaining,
+            } => format!(
+                "doing: satisfying {} at {} (up to {remaining} more ticks)\n",
+                need_name(defs, *need_index),
+                location_label(world, defs, *at)?,
+            ),
+            sim_ai::CurrentAction::Idle { remaining } => {
+                format!("doing: idling ({remaining} ticks left)\n")
+            }
+        };
+        out.push_str(&line);
+    }
+    if let Some(decision) = world.get::<sim_ai::LastDecision>(entity).map_err(err)? {
+        out.push_str(&format!(
+            "last decision (tick {}), {} candidates:\n",
+            decision.tick,
+            decision.candidates.len()
+        ));
+        for (index, candidate) in decision.candidates.iter().enumerate() {
+            let marker = if index as u32 == decision.chosen {
+                ">"
+            } else {
+                " "
+            };
+            let what = match candidate.action {
+                sim_ai::CandidateAction::Satisfy {
+                    location,
+                    need_index,
+                } => format!(
+                    "{} at {}",
+                    need_name(defs, need_index),
+                    location_label(world, defs, location)?
+                ),
+                sim_ai::CandidateAction::Idle => "idle".into(),
+            };
+            out.push_str(&format!(
+                " {marker} {what}: {} micro\n",
+                candidate.score_micro
+            ));
+        }
+    }
     Ok(out)
 }
 

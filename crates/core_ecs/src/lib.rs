@@ -19,6 +19,7 @@
 mod command;
 mod entity;
 mod error;
+pub mod sim_interface;
 mod store;
 mod system;
 mod world;

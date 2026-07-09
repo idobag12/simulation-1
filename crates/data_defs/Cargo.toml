@@ -10,6 +10,8 @@ publish.workspace = true
 [dependencies]
 core_types = { workspace = true }
 sim_people = { workspace = true }
+sim_world = { workspace = true }
+sim_ai = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 ron = { workspace = true }

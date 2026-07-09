@@ -6,16 +6,17 @@
 //! must ship a migration that makes it pass again. Regenerating a fixture
 //! to make a red test green is forbidden without that migration.
 //!
-//! These suites load the FROZEN data snapshot (`fixtures/data_v3/`), never
+//! These suites load the FROZEN data snapshot (`fixtures/data_v4/`), never
 //! the live `data/` directory, so balance edits cannot shift the goldens.
 //!
 //! Golden-hash policy (ADR 0004 §10): when a phase legitimately extends
 //! the hash domain or the registration set, the same commit re-records the
 //! goldens, says why, and proves content continuity (the persistence unit
-//! test `v1_fixture_content_survives_migration_verbatim` checks migrated
+//! tests `v*_fixture_content_survives_migration_verbatim` check migrated
 //! bytes byte-for-byte). History: re-recorded in Phase 1 (event state
-//! joined the hash) and Phase 2 (registration grew by the people set,
-//! format v3 — ADR 0005 §9).
+//! joined the hash), Phase 2 (+people registrations, format v3 —
+//! ADR 0005 §9), and Phase 3 (+world/AI registrations, format v4 —
+//! ADR 0006 §8).
 
 use core_types::{Seed, Ticks, WorldHash};
 use embervale_tests::pinned_defs;
@@ -36,12 +37,12 @@ fn fixture_schedule() -> core_ecs::Schedule {
 /// Committed v1 fixture: seed 7, 50 fixture entities, 1,000 ticks (Phase 0).
 const V1_FIXTURE: &[u8] = include_bytes!("../fixtures/v1_seed7_fixture50_tick1000.embersave");
 
-/// Golden hash of the migrated v1 fixture at load (re-recorded Phase 2:
-/// registration grew, ADR 0005 §9).
-const V1_GOLDEN_HASH_AT_LOAD: u64 = 0x03ca_efc5_08ca_848a;
+/// Golden hash of the migrated v1 fixture at load (re-recorded Phase 3:
+/// registration grew, ADR 0006 §8).
+const V1_GOLDEN_HASH_AT_LOAD: u64 = 0x8ccd_607a_e6ed_1dc3;
 
 /// Golden hash after resuming the migrated v1 world 100 ticks.
-const V1_GOLDEN_HASH_AFTER_100: u64 = 0x3e8e_ca13_31ce_25f2;
+const V1_GOLDEN_HASH_AFTER_100: u64 = 0x9d01_2c37_3597_a349;
 
 #[test]
 fn v1_golden_save_loads_through_migration_to_the_golden_state() {
@@ -81,11 +82,11 @@ fn v1_golden_save_resumes_deterministically() {
 /// scheduled alarms.
 const V2_FIXTURE: &[u8] = include_bytes!("../fixtures/v2_seed13_fixture60_tick2000.embersave");
 
-/// Golden hash of the migrated v2 fixture at load (re-recorded Phase 2).
-const V2_GOLDEN_HASH_AT_LOAD: u64 = 0x1901_f482_7918_6bd9;
+/// Golden hash of the migrated v2 fixture at load (re-recorded Phase 3).
+const V2_GOLDEN_HASH_AT_LOAD: u64 = 0xd975_db6e_093d_693a;
 
 /// Golden hash after resuming the migrated v2 fixture 100 ticks.
-const V2_GOLDEN_HASH_AFTER_100: u64 = 0x9146_9e4d_1a3d_e0ca;
+const V2_GOLDEN_HASH_AFTER_100: u64 = 0xa191_241c_ff6b_bccd;
 
 #[test]
 fn v2_golden_save_loads_through_migration_to_the_golden_state() {
@@ -125,12 +126,14 @@ fn v2_golden_save_resumes_deterministically() {
 const V3_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v3_seed17_fixture40_citizens300_tick3000.embersave");
 
-/// Golden hash of the v3 fixture at load.
-const V3_GOLDEN_HASH_AT_LOAD: u64 = 0x600d_e7e6_0b0b_67a2;
+/// Golden hash of the migrated v3 fixture at load (re-recorded Phase 3).
+const V3_GOLDEN_HASH_AT_LOAD: u64 = 0x518d_d53e_4636_f4b1;
 
-/// Golden hash after resuming the v3 fixture 1,500 ticks (crossing a day
-/// boundary so mortality and needs decay both run again).
-const V3_GOLDEN_HASH_AFTER_1500: u64 = 0xc915_a333_cdd8_635c;
+/// Golden hash after resuming the migrated v3 fixture 1,500 ticks
+/// (crossing a day boundary so mortality and needs decay both run again;
+/// under the Phase 3 schedule the AI also runs — a migrated pre-location
+/// town has no places, so its citizens idle, honestly and deterministically).
+const V3_GOLDEN_HASH_AFTER_1500: u64 = 0xcf87_083b_c1f4_c6a5;
 
 #[test]
 fn v3_golden_save_loads_to_the_exact_golden_state() {
@@ -160,6 +163,59 @@ fn v3_golden_save_resumes_deterministically() {
     assert_eq!(
         sim.state_hash().expect("hash failed"),
         WorldHash::new(V3_GOLDEN_HASH_AFTER_1500),
+        "resumed evolution diverged from the recording"
+    );
+}
+
+// --- v4 (Phase 3: locations + utility AI — actions, plans, decisions) ---
+
+/// Committed v4 fixture: seed 23, 30 fixture entities + 250 citizens with
+/// full AI, 2,500 ticks (past a day boundary and a plan compile), saved
+/// with actions in flight, compiled plans, decision dumps, and live
+/// event/scheduler state.
+const V4_FIXTURE: &[u8] =
+    include_bytes!("../fixtures/v4_seed23_fixture30_citizens250_tick2500.embersave");
+
+/// Golden hash of the v4 fixture at load.
+const V4_GOLDEN_HASH_AT_LOAD: u64 = 0xcf6c_8e60_b027_bb5e;
+
+/// Golden hash after resuming the v4 fixture 700 ticks (mid-flight
+/// actions complete, new decisions land, needs decay and satisfy).
+const V4_GOLDEN_HASH_AFTER_700: u64 = 0xa81b_0ce1_31c1_94a5;
+
+#[test]
+fn v4_golden_save_loads_to_the_exact_golden_state() {
+    let sim = persistence::load_from_bytes(V4_FIXTURE, load_config(), runner::register_world)
+        .expect("committed v4 save no longer loads: save-format break without a migration");
+    assert_eq!(sim.tick(), Ticks::new(2500));
+    assert_eq!(sim.seed(), Seed::new(23));
+    assert!(
+        sim.world()
+            .iter::<sim_ai::CurrentAction>()
+            .expect("query")
+            .count()
+            > 0,
+        "the v4 fixture was saved with actions in flight"
+    );
+    assert_eq!(
+        sim.state_hash().expect("hash failed"),
+        WorldHash::new(V4_GOLDEN_HASH_AT_LOAD),
+        "loaded v4 state differs from the state that was saved"
+    );
+}
+
+#[test]
+fn v4_golden_save_resumes_deterministically() {
+    let mut sim = persistence::load_from_bytes(V4_FIXTURE, load_config(), runner::register_world)
+        .expect("committed v4 save no longer loads");
+    let derived = runner::derive_spec_from_world(sim.world()).expect("derive");
+    assert_eq!(derived.citizens, 250);
+    assert!(derived.fixture);
+    let mut schedule = runner::build_schedule(&derived, &pinned_defs());
+    sim.run_ticks(&mut schedule, 700).expect("resume failed");
+    assert_eq!(
+        sim.state_hash().expect("hash failed"),
+        WorldHash::new(V4_GOLDEN_HASH_AFTER_700),
         "resumed evolution diverged from the recording"
     );
 }

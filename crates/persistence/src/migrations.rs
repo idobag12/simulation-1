@@ -86,17 +86,50 @@ fn v2_to_v3(mut v2: SaveBodyV2) -> Result<SaveBody, PersistError> {
     Ok(v2)
 }
 
+/// Format v3 body (Phase 2), FROZEN. Structurally identical to v4 — the
+/// v3→v4 difference is the registration set, not the body shape.
+type SaveBodyV3 = SaveBody;
+
+// Registration growth from v3 to v4 (Phase 3, ADR 0006 §8). Historical
+// facts of the format, frozen here forever. No events were added.
+const V4_ADDED_COMPONENTS: [&str; 6] = [
+    "world.position",
+    "world.location",
+    "world.residence",
+    "ai.current_action",
+    "ai.daily_plan",
+    "ai.last_decision",
+];
+
+/// Pure step v3 → v4 (ADR 0006 §8): the registration grew by the world/AI
+/// components, all appended after the v3 set; the event registration is
+/// unchanged. A v3 world carried none of the new components, so each new
+/// store is empty. (A migrated town therefore has citizens but no
+/// locations or positions — the AI idles in it, honestly: migrations
+/// restore what was saved, they never invent state.)
+fn v3_to_v4(mut v3: SaveBodyV3) -> Result<SaveBody, PersistError> {
+    let empty_store = codec::to_bytes(&Vec::<(u32, u8)>::new())?;
+    for name in V4_ADDED_COMPONENTS {
+        v3.components.push((name.to_owned(), empty_store.clone()));
+    }
+    Ok(v3)
+}
+
 /// Migrates a decompressed save body from `version` to the current
-/// [`SaveBody`], chaining pure steps (`v1 → v2 → v3`).
+/// [`SaveBody`], chaining pure steps (`v1 → v2 → v3 → v4`).
 pub(crate) fn migrate_to_current(version: u32, raw: Vec<u8>) -> Result<SaveBody, PersistError> {
     match version {
         1 => {
             let v1: SaveBodyV1 = codec::from_bytes(&raw)?;
-            v2_to_v3(v1_to_v2(v1))
+            v3_to_v4(v2_to_v3(v1_to_v2(v1))?)
         }
         2 => {
             let v2: SaveBodyV2 = codec::from_bytes(&raw)?;
-            v2_to_v3(v2)
+            v3_to_v4(v2_to_v3(v2)?)
+        }
+        3 => {
+            let v3: SaveBodyV3 = codec::from_bytes(&raw)?;
+            v3_to_v4(v3)
         }
         FORMAT_VERSION => Ok(codec::from_bytes(&raw)?),
         other => Err(PersistError::UnsupportedVersion(other)),
@@ -112,8 +145,17 @@ mod tests {
         codec::to_bytes(&Vec::<(u32, u8)>::new()).unwrap()
     }
 
+    /// Every component name the chain appends after a v2-era store list.
+    fn all_appended() -> Vec<&'static str> {
+        V3_ADDED_COMPONENTS
+            .iter()
+            .chain(V4_ADDED_COMPONENTS.iter())
+            .copied()
+            .collect()
+    }
+
     #[test]
-    fn v1_bodies_chain_migrate_to_v3() {
+    fn v1_bodies_chain_migrate_to_current() {
         let v1 = SaveBodyV1 {
             seed: Seed::new(9),
             tick: Ticks::new(77),
@@ -122,20 +164,24 @@ mod tests {
             components: vec![("a".into(), vec![4])],
         };
         let raw = codec::to_bytes(&v1).unwrap();
-        let v3 = migrate_to_current(1, raw).unwrap();
-        assert_eq!(v3.seed, Seed::new(9));
-        assert_eq!(v3.tick, Ticks::new(77));
-        assert_eq!(v3.entities, vec![1, 2]);
-        assert_eq!(v3.rng, vec![3]);
-        // Original components pass through verbatim, then the v3 appended
-        // stores, all empty.
-        assert_eq!(v3.components[0], ("a".to_owned(), vec![4]));
-        assert_eq!(v3.components.len(), 1 + V3_ADDED_COMPONENTS.len());
-        for (i, name) in V3_ADDED_COMPONENTS.iter().enumerate() {
-            assert_eq!(v3.components[1 + i], ((*name).to_owned(), empty_store()));
+        let current = migrate_to_current(1, raw).unwrap();
+        assert_eq!(current.seed, Seed::new(9));
+        assert_eq!(current.tick, Ticks::new(77));
+        assert_eq!(current.entities, vec![1, 2]);
+        assert_eq!(current.rng, vec![3]);
+        // Original components pass through verbatim, then every appended
+        // store from the whole chain (v3 set, then v4 set), all empty.
+        assert_eq!(current.components[0], ("a".to_owned(), vec![4]));
+        let appended = all_appended();
+        assert_eq!(current.components.len(), 1 + appended.len());
+        for (i, name) in appended.iter().enumerate() {
+            assert_eq!(
+                current.components[1 + i],
+                ((*name).to_owned(), empty_store())
+            );
         }
         // The v1 empty-events marker survives the whole chain.
-        assert!(v3.events.is_empty());
+        assert!(current.events.is_empty());
     }
 
     #[test]
@@ -170,7 +216,7 @@ mod tests {
         };
         let raw = codec::to_bytes(&v2).unwrap();
         let v3 = migrate_to_current(2, raw).unwrap();
-        assert_eq!(v3.components.len(), 1 + V3_ADDED_COMPONENTS.len());
+        assert_eq!(v3.components.len(), 1 + all_appended().len());
 
         // The migrated blob restores strictly into the grown registration.
         let mut grown = core_events::Events::new(8);
@@ -234,14 +280,15 @@ mod tests {
         assert_eq!(migrated.tick, v1.tick);
         assert_eq!(migrated.entities, v1.entities);
         assert_eq!(migrated.rng, v1.rng);
-        // Original stores verbatim, then the appended (empty) v3 stores.
+        // Original stores verbatim, then every appended (empty) store.
         assert_eq!(&migrated.components[..v1.components.len()], &v1.components);
+        let appended = all_appended();
         assert_eq!(
             migrated.components.len(),
-            v1.components.len() + V3_ADDED_COMPONENTS.len()
+            v1.components.len() + appended.len()
         );
         for (name, bytes) in &migrated.components[v1.components.len()..] {
-            assert!(V3_ADDED_COMPONENTS.contains(&name.as_str()));
+            assert!(appended.contains(&name.as_str()));
             assert_eq!(*bytes, empty_store());
         }
         assert!(migrated.events.is_empty());
@@ -274,12 +321,13 @@ mod tests {
             &migrated.components[..original_components.len()],
             &original_components
         );
+        let appended = all_appended();
         assert_eq!(
             migrated.components.len(),
-            original_components.len() + V3_ADDED_COMPONENTS.len()
+            original_components.len() + appended.len()
         );
         for (name, bytes) in &migrated.components[original_components.len()..] {
-            assert!(V3_ADDED_COMPONENTS.contains(&name.as_str()));
+            assert!(appended.contains(&name.as_str()));
             assert_eq!(*bytes, empty_store());
         }
         assert_eq!(
@@ -288,5 +336,41 @@ mod tests {
             "events blob must differ by exactly the registration extension"
         );
         assert_ne!(migrated.events, original_events);
+    }
+
+    /// ADR 0004 §10 content-continuity proof for the committed Phase 2
+    /// fixture: v3→v4 passes every field through verbatim except the six
+    /// appended (empty) world/AI stores; the events blob is untouched.
+    #[test]
+    fn v3_fixture_content_survives_migration_verbatim() {
+        const V3_FIXTURE: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/v3_seed17_fixture40_citizens300_tick3000.embersave"
+        ));
+        let payload = &V3_FIXTURE[crate::MAGIC.len() + 4..];
+        let raw = zstd::stream::decode_all(payload).expect("fixture decompresses");
+        let v3: SaveBodyV3 = codec::from_bytes(&raw).expect("fixture decodes as v3");
+        let original_events = v3.events.clone();
+        let original_components = v3.components.clone();
+
+        let migrated = migrate_to_current(3, raw).expect("migration");
+        assert_eq!(migrated.seed, Seed::new(17));
+        assert_eq!(migrated.tick, Ticks::new(3000));
+        assert_eq!(
+            &migrated.components[..original_components.len()],
+            &original_components
+        );
+        assert_eq!(
+            migrated.components.len(),
+            original_components.len() + V4_ADDED_COMPONENTS.len()
+        );
+        for (name, bytes) in &migrated.components[original_components.len()..] {
+            assert!(V4_ADDED_COMPONENTS.contains(&name.as_str()));
+            assert_eq!(*bytes, empty_store());
+        }
+        assert_eq!(
+            migrated.events, original_events,
+            "v3→v4 adds no events; the blob must pass through untouched"
+        );
     }
 }

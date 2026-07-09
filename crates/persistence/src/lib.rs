@@ -35,10 +35,10 @@ use thiserror::Error;
 /// Current save format version. Bumping this requires a migration in
 /// [`migrations`] and a compatibility test that loads the previous version.
 /// History: v1 = Phase 0 (no event state); v2 = Phase 1 (+ event state);
-/// v3 = Phase 2 (registration grew by the people components/events —
-/// ADR 0005 §9: appending registrations is a format bump with a
-/// list-extension migration).
-pub const FORMAT_VERSION: u32 = 3;
+/// v3 = Phase 2 (+ people registrations — ADR 0005 §9: appending
+/// registrations is a format bump with a list-extension migration);
+/// v4 = Phase 3 (+ world/AI registrations, ADR 0006 §8).
+pub const FORMAT_VERSION: u32 = 4;
 
 /// 8-byte file magic identifying an Embervale save.
 pub const MAGIC: &[u8; 8] = b"EMBRSAV1";
@@ -81,9 +81,10 @@ pub enum PersistError {
     Ecs(#[from] EcsError),
 }
 
-/// The full serialized world state (SPEC §9), format v2. Everything a
-/// running simulation is, minus the schedule and calendar, which the
-/// application reconstructs exactly as it reconstructs registrations.
+/// The full serialized world state (SPEC §9), current format (v4).
+/// Everything a running simulation is, minus the schedule and calendar,
+/// which the application reconstructs exactly as it reconstructs
+/// registrations.
 ///
 /// Invariant: this struct is the CURRENT format. When the format changes,
 /// it is copied verbatim into [`migrations`] under its version name and

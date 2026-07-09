@@ -8,13 +8,42 @@ use core_types::Seed;
 use embervale_tests::live_defs;
 use headless::runner::{self, WorldSpec};
 
+/// The passive-town schedule (needs decay + mortality, no AI): the Phase 2
+/// demographic regression runs 10,000 citizens, and full per-tick Tier A
+/// AI at that scale is exactly what the Phase 8 LOD tiers exist to make
+/// affordable (SPEC §10/§15: "Tier A only at small scale" in Phase 3).
+/// Mortality — the system under regression — is identical either way.
+fn passive_schedule(defs: &data_defs::DataDefs) -> core_ecs::Schedule {
+    let mut schedule = core_ecs::Schedule::new();
+    schedule.add_system(
+        core_ecs::Rate::Hour,
+        Box::new(sim_people::NeedsDecaySystem::new(
+            defs.people
+                .needs
+                .needs
+                .iter()
+                .map(|n| n.decay_per_hour)
+                .collect(),
+        )),
+    );
+    schedule.add_system(
+        core_ecs::Rate::Day,
+        Box::new(sim_people::MortalitySystem::new(
+            defs.people.mortality.clone(),
+            runner::ticks_per_year(defs),
+        )),
+    );
+    schedule
+}
+
 /// SPEC §15 Phase 2 exit criterion, all three clauses in one golden-seed
 /// run: 10,000 citizens, one simulated year.
 #[test]
 fn ten_thousand_citizens_simulate_a_year_within_demographic_bands() {
     let defs = live_defs();
     let spec = WorldSpec::town(Seed::new(0xC171_2E17), 10_000);
-    let (mut sim, mut schedule) = runner::build_simulation(&spec, &defs).expect("build failed");
+    let (mut sim, _) = runner::build_simulation(&spec, &defs).expect("build failed");
+    let mut schedule = passive_schedule(&defs);
 
     let initial_population = headless::inspect::population(sim.world()).expect("count");
     assert_eq!(initial_population, 10_000);
@@ -65,7 +94,8 @@ fn the_ten_thousand_citizen_year_is_deterministic() {
     let year = runner::ticks_per_year(&defs);
 
     let run = |()| -> core_types::WorldHash {
-        let (mut sim, mut schedule) = runner::build_simulation(&spec, &defs).expect("build failed");
+        let (mut sim, _) = runner::build_simulation(&spec, &defs).expect("build failed");
+        let mut schedule = passive_schedule(&defs);
         sim.run_ticks(&mut schedule, year).expect("run failed");
         sim.state_hash().expect("hash failed")
     };

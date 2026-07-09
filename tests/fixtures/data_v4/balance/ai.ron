@@ -1,0 +1,30 @@
+// Utility-AI tunables (SPEC §11; ADR 0006 §7).
+AiConfig(
+    // Flat travel time between any two locations (no map until Phase 9).
+    travel_ticks: 15,
+    // urgency = deficit^e — low needs are ignorable, critical ones dominate.
+    urgency_exponent: 2,
+    // Cost of each tick spent traveling/performing, in score micro units.
+    time_cost_micro_per_tick: 300,
+    // Longest single performance; actions end here even if the need isn't full.
+    max_perform_ticks: 480,
+    // How long an Idle decision lasts before reconsidering.
+    idle_ticks: 20,
+    // Citizens compile tomorrow's plan at this hour.
+    plan_compile_hour: 21,
+    sleep: SleepDef(
+        base_start_hour: 22,
+        base_end_hour: 6,
+        // Industrious citizens shift their window up to this much earlier.
+        max_shift_minutes: 90,
+        shift_trait_id: "industriousness",
+        rest_need_id: "rest",
+        // Score bias for sleeping at home during the window.
+        home_bias_micro: 400000,
+    ),
+    need_trait_weights: [
+        NeedTraitWeight(need_id: "social",  trait_id: "sociability", weight_per_mille: 900),
+        NeedTraitWeight(need_id: "purpose", trait_id: "ambition",    weight_per_mille: 900),
+        NeedTraitWeight(need_id: "esteem",  trait_id: "ambition",    weight_per_mille: 600),
+    ],
+)

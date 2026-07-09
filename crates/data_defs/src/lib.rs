@@ -81,6 +81,10 @@ pub struct DataDefs {
     pub engine: EngineConfig,
     /// People-simulation tunables and name lists (Phase 2, ADR 0005).
     pub people: sim_people::config::PeopleConfig,
+    /// Location kinds (Phase 3, ADR 0006 §2).
+    pub locations: sim_world::config::LocationsConfig,
+    /// Utility-AI tunables (Phase 3, ADR 0006 §7).
+    pub ai: sim_ai::config::AiConfig,
 }
 
 /// Loads and validates every data definition from a `data/` directory
@@ -98,13 +102,81 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
         given_male: load_ron(&data_root.join("names/given_male.ron"))?,
         family: load_ron(&data_root.join("names/family.ron"))?,
     };
+    let locations: sim_world::config::LocationsConfig = load_ron(&data_root.join("locations.ron"))?;
+    let ai: sim_ai::config::AiConfig = load_ron(&data_root.join("balance/ai.ron"))?;
     validate(data_root, &calendar, &engine)?;
     validate_people(data_root, &calendar, &people)?;
+    validate_locations(data_root, &locations, &people)?;
+    validate_ai(data_root, &ai, &people, &locations)?;
     Ok(DataDefs {
         calendar,
         engine,
         people,
+        locations,
+        ai,
     })
+}
+
+/// Resolves the loaded, validated configs into the index-based tables the
+/// AI systems run on (`sim_ai::AiTables`; ADR 0006 §1 — `sim_ai` never
+/// sees other sim crates' config types).
+///
+/// Invariant: only call with a `DataDefs` produced by [`load`] (or an
+/// equally validated value); resolution relies on validation having
+/// checked every cross-reference.
+pub fn resolve_ai(defs: &DataDefs) -> sim_ai::AiTables {
+    let need_index = |id: &str| -> u32 {
+        defs.people
+            .needs
+            .needs
+            .iter()
+            .position(|n| n.id == id)
+            .unwrap_or(0) as u32 // validation guarantees a hit; 0 is unreachable
+    };
+    let trait_index = |id: &str| -> u32 {
+        defs.people
+            .traits
+            .traits
+            .iter()
+            .position(|t| t.id == id)
+            .unwrap_or(0) as u32 // validation guarantees a hit
+    };
+
+    let mut need_trait: Vec<Option<(u32, u32)>> = vec![None; defs.people.needs.needs.len()];
+    for weight in &defs.ai.need_trait_weights {
+        let slot = need_index(&weight.need_id) as usize;
+        if let Some(entry) = need_trait.get_mut(slot) {
+            *entry = Some((trait_index(&weight.trait_id), weight.weight_per_mille));
+        }
+    }
+
+    sim_ai::AiTables {
+        travel_ticks: defs.ai.travel_ticks,
+        urgency_exponent: defs.ai.urgency_exponent,
+        time_cost_micro_per_tick: defs.ai.time_cost_micro_per_tick,
+        max_perform_ticks: defs.ai.max_perform_ticks,
+        idle_ticks: defs.ai.idle_ticks,
+        plan_compile_hour: defs.ai.plan_compile_hour,
+        sleep_start_minute: u16::from(defs.ai.sleep.base_start_hour) * 60,
+        sleep_end_minute: u16::from(defs.ai.sleep.base_end_hour) * 60,
+        sleep_max_shift_minutes: defs.ai.sleep.max_shift_minutes,
+        sleep_shift_trait: trait_index(&defs.ai.sleep.shift_trait_id),
+        rest_need: need_index(&defs.ai.sleep.rest_need_id),
+        sleep_home_bias_micro: defs.ai.sleep.home_bias_micro,
+        kind_is_home: defs.locations.kinds.iter().map(|k| k.is_home).collect(),
+        kind_satisfiers: defs
+            .locations
+            .kinds
+            .iter()
+            .map(|kind| {
+                kind.satisfies
+                    .iter()
+                    .map(|s| (need_index(&s.need_id), s.per_tick))
+                    .collect()
+            })
+            .collect(),
+        need_trait,
+    }
 }
 
 fn load_ron<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, DataError> {
@@ -341,6 +413,162 @@ fn validate_calendar_age_fit(
     Ok(())
 }
 
+/// Validates `data/locations.ron` (ADR 0006 §7): exactly one home kind,
+/// positive rates, need ids that exist, unique kind ids, and non-home
+/// kinds that actually get instantiated.
+fn validate_locations(
+    data_root: &Path,
+    locations: &sim_world::config::LocationsConfig,
+    people: &sim_people::config::PeopleConfig,
+) -> Result<(), DataError> {
+    let file = "locations.ron";
+    let home_count = locations.kinds.iter().filter(|k| k.is_home).count();
+    if home_count != 1 {
+        return Err(verr(
+            data_root,
+            file,
+            format!("exactly one home kind required, found {home_count}"),
+        ));
+    }
+    let mut seen_ids: Vec<&str> = Vec::new();
+    for kind in &locations.kinds {
+        if seen_ids.contains(&kind.id.as_str()) {
+            return Err(verr(
+                data_root,
+                file,
+                format!("duplicate location kind id `{}`", kind.id),
+            ));
+        }
+        seen_ids.push(&kind.id);
+        if !kind.is_home && kind.count == 0 {
+            return Err(verr(
+                data_root,
+                file,
+                format!("public kind `{}` has count 0 (dead data)", kind.id),
+            ));
+        }
+        if kind.satisfies.is_empty() {
+            return Err(verr(
+                data_root,
+                file,
+                format!("kind `{}` satisfies nothing (dead data)", kind.id),
+            ));
+        }
+        for satisfier in &kind.satisfies {
+            if satisfier.per_tick <= 0 {
+                return Err(verr(
+                    data_root,
+                    file,
+                    format!(
+                        "kind `{}` satisfier `{}` must have per_tick >= 1",
+                        kind.id, satisfier.need_id
+                    ),
+                ));
+            }
+            if !people.needs.needs.iter().any(|n| n.id == satisfier.need_id) {
+                return Err(verr(
+                    data_root,
+                    file,
+                    format!(
+                        "kind `{}` references unknown need `{}`",
+                        kind.id, satisfier.need_id
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates `data/balance/ai.ron` (ADR 0006 §7), including its
+/// cross-references into needs, traits, and location kinds.
+fn validate_ai(
+    data_root: &Path,
+    ai: &sim_ai::config::AiConfig,
+    people: &sim_people::config::PeopleConfig,
+    locations: &sim_world::config::LocationsConfig,
+) -> Result<(), DataError> {
+    let file = "balance/ai.ron";
+    let e = |message: String| verr(data_root, file, message);
+
+    if ai.urgency_exponent < 1 {
+        return Err(e("urgency_exponent must be >= 1".into()));
+    }
+    for (name, value) in [
+        ("travel_ticks", ai.travel_ticks),
+        ("max_perform_ticks", ai.max_perform_ticks),
+        ("idle_ticks", ai.idle_ticks),
+    ] {
+        if value == 0 {
+            return Err(e(format!("{name} must be >= 1")));
+        }
+    }
+    if ai.time_cost_micro_per_tick < 0 {
+        return Err(e("time_cost_micro_per_tick must be >= 0".into()));
+    }
+    for (name, hour) in [
+        ("plan_compile_hour", ai.plan_compile_hour),
+        ("sleep.base_start_hour", ai.sleep.base_start_hour),
+        ("sleep.base_end_hour", ai.sleep.base_end_hour),
+    ] {
+        if hour >= 24 {
+            return Err(e(format!("{name} must be < 24, got {hour}")));
+        }
+    }
+    if ai.sleep.home_bias_micro < 0 {
+        return Err(e("sleep.home_bias_micro must be >= 0".into()));
+    }
+
+    let need_exists = |id: &str| people.needs.needs.iter().any(|n| n.id == id);
+    let trait_exists = |id: &str| people.traits.traits.iter().any(|t| t.id == id);
+    if !need_exists(&ai.sleep.rest_need_id) {
+        return Err(e(format!(
+            "sleep.rest_need_id `{}` is not a defined need",
+            ai.sleep.rest_need_id
+        )));
+    }
+    if !trait_exists(&ai.sleep.shift_trait_id) {
+        return Err(e(format!(
+            "sleep.shift_trait_id `{}` is not a defined trait",
+            ai.sleep.shift_trait_id
+        )));
+    }
+    // A town whose citizens cannot sleep is a data error (ADR 0006 §7):
+    // some kind must satisfy the rest need.
+    let rest_satisfiable = locations.kinds.iter().any(|kind| {
+        kind.satisfies
+            .iter()
+            .any(|s| s.need_id == ai.sleep.rest_need_id)
+    });
+    if !rest_satisfiable {
+        return Err(e(format!(
+            "no location kind satisfies the rest need `{}`",
+            ai.sleep.rest_need_id
+        )));
+    }
+    for weight in &ai.need_trait_weights {
+        if !need_exists(&weight.need_id) {
+            return Err(e(format!(
+                "need_trait_weights references unknown need `{}`",
+                weight.need_id
+            )));
+        }
+        if !trait_exists(&weight.trait_id) {
+            return Err(e(format!(
+                "need_trait_weights references unknown trait `{}`",
+                weight.trait_id
+            )));
+        }
+        if weight.weight_per_mille > 1000 {
+            return Err(e(format!(
+                "need_trait_weights weight for `{}` must be <= 1000",
+                weight.need_id
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate(
     data_root: &Path,
     calendar: &CalendarConfig,
@@ -395,6 +623,23 @@ mod tests {
         annual_death_rate_max_per_mille: 40,
     )"#;
     const GOOD_NAMES: &str = r#"NameList(names: ["A", "B"])"#;
+    const GOOD_LOCATIONS: &str = r#"LocationsConfig(kinds: [
+        LocationKindDef(id: "home", is_home: true, count: 0, satisfies: [
+            SatisfierDef(need_id: "hunger", per_tick: 2000),
+        ]),
+        LocationKindDef(id: "tavern", is_home: false, count: 2, satisfies: [
+            SatisfierDef(need_id: "hunger", per_tick: 9000),
+        ]),
+    ])"#;
+    const GOOD_AI: &str = r#"AiConfig(
+        travel_ticks: 10, urgency_exponent: 2, time_cost_micro_per_tick: 300,
+        max_perform_ticks: 200, idle_ticks: 15, plan_compile_hour: 21,
+        sleep: SleepDef(base_start_hour: 22, base_end_hour: 6, max_shift_minutes: 60,
+            shift_trait_id: "ambition", rest_need_id: "hunger", home_bias_micro: 100000),
+        need_trait_weights: [
+            NeedTraitWeight(need_id: "hunger", trait_id: "ambition", weight_per_mille: 500),
+        ],
+    )"#;
 
     /// Writes a fully valid data tree, then applies `overrides`
     /// (path -> replacement content; empty content deletes the file).
@@ -413,6 +658,8 @@ mod tests {
             ("names/given_female.ron", GOOD_NAMES),
             ("names/given_male.ron", GOOD_NAMES),
             ("names/family.ron", GOOD_NAMES),
+            ("locations.ron", GOOD_LOCATIONS),
+            ("balance/ai.ron", GOOD_AI),
         ];
         for (rel, content) in base {
             let path = root.join(rel);
@@ -437,6 +684,91 @@ mod tests {
         assert_eq!(defs.engine.event_log_capacity, 4096);
         assert_eq!(defs.people.needs.needs.len(), 1);
         assert_eq!(defs.people.mortality.per_day_chance(61), 5_000_000);
+        let tables = resolve_ai(&defs);
+        assert_eq!(tables.kind_is_home, vec![true, false]);
+        assert_eq!(tables.kind_satisfiers[1], vec![(0, 9000)]);
+        assert_eq!(tables.rest_need, 0);
+        assert_eq!(tables.need_trait[0], Some((0, 500)));
+    }
+
+    /// ADR 0006 §7: seeded errors in locations.ron and ai.ron are caught
+    /// with precise messages.
+    #[test]
+    fn location_and_ai_validation_catches_seeded_errors() {
+        // Two home kinds.
+        let root = write_tree(&[(
+            "locations.ron",
+            r#"LocationsConfig(kinds: [
+                LocationKindDef(id: "a", is_home: true, count: 0, satisfies: [SatisfierDef(need_id: "hunger", per_tick: 1)]),
+                LocationKindDef(id: "b", is_home: true, count: 0, satisfies: [SatisfierDef(need_id: "hunger", per_tick: 1)]),
+            ])"#,
+        )]);
+        match load(&root) {
+            Err(DataError::Validation { message, .. }) => {
+                assert!(message.contains("exactly one home kind"), "{message}");
+            }
+            other => panic!("expected Validation error, got {other:?}"),
+        }
+
+        // Unknown need in a satisfier.
+        let root = write_tree(&[(
+            "locations.ron",
+            r#"LocationsConfig(kinds: [
+                LocationKindDef(id: "home", is_home: true, count: 0, satisfies: [SatisfierDef(need_id: "hungerz", per_tick: 1)]),
+            ])"#,
+        )]);
+        assert!(matches!(load(&root), Err(DataError::Validation { .. })));
+
+        // AI referencing an unknown trait.
+        let root = write_tree(&[(
+            "balance/ai.ron",
+            r#"AiConfig(
+                travel_ticks: 10, urgency_exponent: 2, time_cost_micro_per_tick: 300,
+                max_perform_ticks: 200, idle_ticks: 15, plan_compile_hour: 21,
+                sleep: SleepDef(base_start_hour: 22, base_end_hour: 6, max_shift_minutes: 60,
+                    shift_trait_id: "nonexistent", rest_need_id: "hunger", home_bias_micro: 1),
+                need_trait_weights: [],
+            )"#,
+        )]);
+        match load(&root) {
+            Err(DataError::Validation { message, .. }) => {
+                assert!(message.contains("shift_trait_id"), "{message}");
+            }
+            other => panic!("expected Validation error, got {other:?}"),
+        }
+
+        // No location satisfies the rest need.
+        let root = write_tree(&[
+            (
+                "locations.ron",
+                r#"LocationsConfig(kinds: [
+                LocationKindDef(id: "home", is_home: true, count: 0, satisfies: [SatisfierDef(need_id: "hunger", per_tick: 1)]),
+            ])"#,
+            ),
+            (
+                "balance/needs.ron",
+                r#"NeedsConfig(needs: [
+                NeedDef(id: "hunger", decay_per_hour: 14600, initial_min: 550000, initial_max: 1000000),
+                NeedDef(id: "rest", decay_per_hour: 26000, initial_min: 500000, initial_max: 1000000),
+            ])"#,
+            ),
+            (
+                "balance/ai.ron",
+                r#"AiConfig(
+                travel_ticks: 10, urgency_exponent: 2, time_cost_micro_per_tick: 300,
+                max_perform_ticks: 200, idle_ticks: 15, plan_compile_hour: 21,
+                sleep: SleepDef(base_start_hour: 22, base_end_hour: 6, max_shift_minutes: 60,
+                    shift_trait_id: "ambition", rest_need_id: "rest", home_bias_micro: 1),
+                need_trait_weights: [],
+            )"#,
+            ),
+        ]);
+        match load(&root) {
+            Err(DataError::Validation { message, .. }) => {
+                assert!(message.contains("no location kind satisfies"), "{message}");
+            }
+            other => panic!("expected Validation error, got {other:?}"),
+        }
     }
 
     #[test]

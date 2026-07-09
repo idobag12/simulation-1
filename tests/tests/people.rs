@@ -48,10 +48,17 @@ fn certain_mortality_kills_everyone_and_dissolves_every_household() {
         0,
         "every household must dissolve when its last member dies"
     );
+    // Only location entities remain (homes + public places persist;
+    // Phase 3 gave towns real places — people die, places don't).
+    let locations = sim
+        .world()
+        .iter::<core_ecs::sim_interface::Location>()
+        .expect("query")
+        .count();
     assert_eq!(
         sim.world().entity_count(),
-        0,
-        "no citizen or household entities may remain"
+        locations,
+        "besides locations, no citizen or household entities may remain"
     );
 
     sim.step(&mut schedule).expect("tick 1");
@@ -146,14 +153,29 @@ fn deaths_replay_identically_across_save_load() {
     );
 }
 
-/// Needs decay arithmetic: after one hour-firing, every level dropped by
-/// exactly the data-defined amount (clamped at zero), and levels never
-/// leave the valid range over a long run.
+/// Needs decay arithmetic IN ISOLATION: after one hour-firing, every level
+/// dropped by exactly the data-defined amount (clamped at zero), and
+/// levels never leave the valid range over a long run. The AI systems are
+/// deliberately absent (a custom decay-only schedule) so satisfaction
+/// gains cannot mask the decay arithmetic; the AI/decay interplay is
+/// covered by `ai.rs`.
 #[test]
 fn needs_decay_matches_config_exactly_and_clamps_at_zero() {
     let defs = pinned_defs();
     let spec = WorldSpec::town(Seed::new(34), 25);
-    let (mut sim, mut schedule) = runner::build_simulation(&spec, &defs).expect("build");
+    let (mut sim, _) = runner::build_simulation(&spec, &defs).expect("build");
+    let mut schedule = core_ecs::Schedule::new();
+    schedule.add_system(
+        core_ecs::Rate::Hour,
+        Box::new(sim_people::NeedsDecaySystem::new(
+            defs.people
+                .needs
+                .needs
+                .iter()
+                .map(|n| n.decay_per_hour)
+                .collect(),
+        )),
+    );
 
     let before: Vec<(u32, Vec<i64>)> = sim
         .world()
@@ -299,7 +321,7 @@ fn cli_resume_without_flags_matches_uninterrupted_run() {
     std::fs::create_dir_all(&dir).expect("mkdir");
     let save = dir.join("resume.embersave");
     let save_str = save.to_str().expect("utf8");
-    let data = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/data_v3");
+    let data = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/data_v4");
 
     let arg = |v: &[&str]| -> Vec<String> {
         let mut a: Vec<String> = v.iter().map(|s| (*s).to_owned()).collect();

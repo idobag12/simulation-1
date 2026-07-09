@@ -96,7 +96,8 @@ pub fn load_config(defs: &DataDefs) -> Result<LoadConfig, RunnerError> {
 ///
 /// Invariant (ADR 0005 §9): this list only ever GROWS AT THE END, and any
 /// growth bumps `persistence::FORMAT_VERSION` with a list-extension
-/// migration. History: v2 = fixture set; v3 = + people set.
+/// migration. History: v2 = fixture set; v3 = + people set; v4 = + world/
+/// AI set (Phase 3, ADR 0006 §8).
 pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register::<fixture::FixtureWealth>()?;
     world.register::<fixture::FixtureTag>()?;
@@ -105,6 +106,12 @@ pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register::<sim_people::Personality>()?;
     world.register::<sim_people::HouseholdMember>()?;
     world.register::<sim_people::Household>()?;
+    world.register::<core_ecs::sim_interface::Position>()?;
+    world.register::<core_ecs::sim_interface::Location>()?;
+    world.register::<core_ecs::sim_interface::Residence>()?;
+    world.register::<sim_ai::CurrentAction>()?;
+    world.register::<sim_ai::DailyPlan>()?;
+    world.register::<sim_ai::LastDecision>()?;
     world.register_event::<fixture::FixtureChurn>()?;
     world.register_event::<fixture::FixtureAlarm>()?;
     world.register_event::<sim_people::PersonDied>()?;
@@ -134,8 +141,10 @@ pub fn derive_spec_from_world(world: &World) -> Result<WorldSpec, EcsError> {
 
 /// Builds the schedule for a spec: the explicit ordered system lists
 /// (SPEC §6). Order within each rate:
-/// - Tick: fixture alarm chain, fixture walk (fixture worlds only).
-/// - Hour: needs decay (towns only).
+/// - Tick: fixture alarm chain, fixture walk (fixture worlds only);
+///   then ai.decide, ai.act (towns only — decisions land before actions
+///   advance, so a fresh decision starts moving the same tick).
+/// - Hour: ai.plan (compile hour only), then needs decay (towns only).
 /// - Day: mortality (towns only).
 pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
     let mut schedule = Schedule::new();
@@ -144,6 +153,13 @@ pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
         schedule.add_system(Rate::Tick, Box::new(fixture::FixtureWalkSystem));
     }
     if spec.citizens > 0 {
+        let tables = data_defs::resolve_ai(defs);
+        schedule.add_system(
+            Rate::Tick,
+            Box::new(sim_ai::DecideSystem::new(tables.clone())),
+        );
+        schedule.add_system(Rate::Tick, Box::new(sim_ai::ActSystem::new(tables.clone())));
+        schedule.add_system(Rate::Hour, Box::new(sim_ai::PlanSystem::new(tables)));
         let decays = defs
             .people
             .needs
@@ -185,6 +201,16 @@ pub fn build_simulation(
             spec.citizens,
             ticks_per_year(defs),
         )?;
+        // World genesis (order fixed: public locations, then homes —
+        // deterministic entity indices). Household member lists are read
+        // here and passed as plain entities: sim_world never touches
+        // sim_people types (SPEC §4).
+        sim_world::genesis::create_public_locations(&mut world, &defs.locations)?;
+        let households: Vec<Vec<core_ecs::Entity>> = world
+            .iter::<sim_people::Household>()?
+            .map(|(_, household)| household.members.clone())
+            .collect();
+        sim_world::genesis::place_households(&mut world, &defs.locations, &households)?;
     }
     Ok((Simulation::new(world, calendar), build_schedule(spec, defs)))
 }
