@@ -11,4 +11,3 @@ core_types = { workspace = true }
 core_rng = { workspace = true }
 core_ecs = { workspace = true }
 serde = { workspace = true }
-thiserror = { workspace = true }

@@ -52,10 +52,11 @@ fn citizen_report(
 ) -> Result<String, String> {
     let world = sim.world();
     let ticks_per_year = runner::ticks_per_year(defs);
-    let age = identity.age_years(sim.tick().raw(), ticks_per_year);
+    let age_years = identity.age_years(sim.tick(), ticks_per_year);
+    let age_days = identity.age_days_into_year(sim.tick(), ticks_per_year);
 
     let mut out = format!(
-        "citizen #{}: {} {} ({:?}, age {age})\n",
+        "citizen #{}: {} {} ({:?}, age {age_years}y {age_days}d)\n",
         entity.index(),
         identity.given_name,
         identity.family_name,
@@ -65,7 +66,7 @@ fn citizen_report(
     if let Some(needs) = world.get::<sim_people::Needs>(entity).map_err(err)? {
         out.push_str("needs (per-million):\n");
         for (def, level) in defs.people.needs.needs.iter().zip(&needs.levels) {
-            out.push_str(&format!("  {:<10} {level}\n", def.id));
+            out.push_str(&format!("  {:<10} {}\n", def.id, level.raw()));
         }
     }
     if let Some(personality) = world.get::<sim_people::Personality>(entity).map_err(err)? {
@@ -100,7 +101,7 @@ fn citizen_report(
 pub fn demography(sim: &Simulation, defs: &DataDefs) -> Result<String, String> {
     let world = sim.world();
     let ticks_per_year = runner::ticks_per_year(defs);
-    let now = sim.tick().raw();
+    let now = sim.tick();
 
     let mut population = 0u32;
     let mut male = 0u32;
@@ -152,4 +153,59 @@ pub fn demography(sim: &Simulation, defs: &DataDefs) -> Result<String, String> {
 /// Counts live citizens (the `Identity` store population).
 pub fn population(world: &World) -> Result<u32, core_ecs::EcsError> {
     Ok(world.iter::<sim_people::Identity>()?.count() as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runner::{self, WorldSpec};
+    use core_types::Seed;
+
+    fn defs() -> DataDefs {
+        let root = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../data"));
+        data_defs::load(root).expect("live data loads")
+    }
+
+    /// Content assertions for the inspector outputs (Phase 2 review):
+    /// every section ADR 0005 §7 promises actually appears, with real
+    /// values.
+    #[test]
+    fn inspector_outputs_contain_the_promised_sections() {
+        let defs = defs();
+        let spec = WorldSpec::town(Seed::new(51), 30);
+        let (sim, _) = runner::build_simulation(&spec, &defs).expect("build");
+
+        // Entity 0 is the first genesis household; its first member is a
+        // citizen.
+        let household_dump = inspect_entity(&sim, &defs, 0).expect("household dump");
+        assert!(
+            household_dump.starts_with("household #0:"),
+            "{household_dump}"
+        );
+
+        let citizen_dump = inspect_entity(&sim, &defs, 1).expect("citizen dump");
+        assert!(citizen_dump.starts_with("citizen #1:"), "{citizen_dump}");
+        for section in [
+            "age ", // "age {years}y {days}d" (ADR 0005 §7: years/days)
+            "y ",
+            "needs (per-million):",
+            "hunger",
+            "personality (per-mille):",
+            "industriousness",
+            "household: #0",
+        ] {
+            assert!(
+                citizen_dump.contains(section),
+                "missing `{section}` in:\n{citizen_dump}"
+            );
+        }
+
+        let summary = demography(&sim, &defs).expect("demography");
+        assert!(summary.contains("population 30"), "{summary}");
+        assert!(summary.contains("age decades:"), "{summary}");
+        assert!(summary.contains("household sizes:"), "{summary}");
+
+        let missing = inspect_entity(&sim, &defs, 9_999);
+        assert!(missing.is_err(), "dead index must error, got {missing:?}");
+    }
 }

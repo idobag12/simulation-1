@@ -8,6 +8,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+core_types = { workspace = true }
 sim_people = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }

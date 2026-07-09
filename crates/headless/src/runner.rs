@@ -111,6 +111,27 @@ pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     Ok(())
 }
 
+/// Derives the schedule-relevant world composition from a LOADED world's
+/// actual content, so a resumed run always reconstructs exactly the
+/// systems the world was saved under (SPEC §9: loading a save and running
+/// N ticks must equal running the original those same N ticks). The save
+/// is authoritative — for its composition just as for its seed; CLI flags
+/// never override it.
+///
+/// Known degenerate case (documented): a fixture world saved with zero
+/// `FixtureWealth` rows (possible only via `--fixture --entities 0`)
+/// derives `fixture: false` and drops the alarm chain on resume.
+pub fn derive_spec_from_world(world: &World) -> Result<WorldSpec, EcsError> {
+    let citizens = world.iter::<sim_people::Identity>()?.count() as u32;
+    let fixture_rows = world.iter::<fixture::FixtureWealth>()?.count() as u32;
+    Ok(WorldSpec {
+        seed: world.seed(),
+        fixture: fixture_rows > 0,
+        fixture_entities: fixture_rows,
+        citizens,
+    })
+}
+
 /// Builds the schedule for a spec: the explicit ordered system lists
 /// (SPEC §6). Order within each rate:
 /// - Tick: fixture alarm chain, fixture walk (fixture worlds only).

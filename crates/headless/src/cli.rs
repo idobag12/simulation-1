@@ -31,7 +31,9 @@ pub const USAGE: &str = "usage:
   embervale demography --load PATH [--data DIR]
 
 defaults: --hash-interval 10000, --entities 200, --citizens 0,
-          --resume-at ticks/2, --data ./data";
+          --resume-at ticks/2, --data ./data
+with --load, the save determines the world's composition; --fixture and
+--citizens apply to fresh runs only";
 
 /// Full CLI entry point: dispatches and maps the outcome to the exit-code
 /// contract — success ⇒ 0, determinism mismatch ⇒ [`EXIT_MISMATCH`],
@@ -142,18 +144,6 @@ impl Flags {
         })
     }
 
-    /// The spec used only for schedule reconstruction on `--load` (the
-    /// seed comes from the save, so a placeholder is fine here — the
-    /// schedule depends only on the fixture/citizens flags).
-    fn schedule_spec(&self) -> WorldSpec {
-        WorldSpec {
-            seed: Seed::new(0),
-            fixture: self.fixture,
-            fixture_entities: self.entities,
-            citizens: self.citizens,
-        }
-    }
-
     fn ticks(&self) -> Result<u64, String> {
         self.ticks.ok_or("--ticks is required".into())
     }
@@ -168,10 +158,15 @@ fn parse_num<T: std::str::FromStr>(raw: &str, flag: &str) -> Result<T, String> {
         .map_err(|_| format!("{flag}: `{raw}` is not a valid number"))
 }
 
+/// Loads a save and validates its town against the loaded data
+/// definitions (vector lengths vs. need/trait order — a mismatch is a
+/// precise startup error, never a silent reinterpretation).
 fn load_sim(flags: &Flags, defs: &DataDefs) -> Result<sim_time::Simulation, String> {
     let load_config = runner::load_config(defs).map_err(|e| e.to_string())?;
-    persistence::load_from_file(flags.load_path()?, load_config, runner::register_world)
-        .map_err(|e| e.to_string())
+    let sim = persistence::load_from_file(flags.load_path()?, load_config, runner::register_world)
+        .map_err(|e| e.to_string())?;
+    sim_people::validate_town(sim.world(), &defs.people).map_err(|e| e.to_string())?;
+    Ok(sim)
 }
 
 fn cmd_run(flags: &Flags) -> Result<bool, String> {
@@ -179,11 +174,20 @@ fn cmd_run(flags: &Flags) -> Result<bool, String> {
     let defs = flags.defs()?;
     let (mut sim, mut schedule) = match &flags.load {
         Some(_) => {
-            // Schedule/calendar/log-capacity are reconstructed from flags +
-            // data files, exactly like registrations; the seed comes from
-            // the save, so --seed is not consulted here.
+            // The save is authoritative for the world's composition (which
+            // systems must run) exactly as it is for the seed: the schedule
+            // is derived from the loaded world's content, never from
+            // --fixture/--citizens (SPEC §9 load-and-continue equivalence).
             let sim = load_sim(flags, &defs)?;
-            let schedule = runner::build_schedule(&flags.schedule_spec(), &defs);
+            let derived = runner::derive_spec_from_world(sim.world()).map_err(|e| e.to_string())?;
+            if flags.fixture || flags.citizens > 0 {
+                eprintln!(
+                    "note: --fixture/--citizens are ignored with --load; the save determines \
+                     the world's composition ({} citizens, fixture: {})",
+                    derived.citizens, derived.fixture
+                );
+            }
+            let schedule = runner::build_schedule(&derived, &defs);
             (sim, schedule)
         }
         None => runner::build_simulation(&flags.spec()?, &defs).map_err(|e| e.to_string())?,

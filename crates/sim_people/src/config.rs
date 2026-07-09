@@ -120,7 +120,9 @@ pub struct DemographicsConfig {
     pub age_bands: Vec<AgeBand>,
     /// Probability a citizen is male, per-mille.
     pub male_per_mille: u32,
-    /// Smallest household generated.
+    /// Smallest household size drawn at genesis. The final household
+    /// absorbs the remaining citizens and may be smaller (see
+    /// `genesis::populate`).
     pub household_min: u32,
     /// Largest household generated.
     pub household_max: u32,

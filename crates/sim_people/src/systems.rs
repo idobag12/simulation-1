@@ -5,8 +5,9 @@
 use core_ecs::{CommandBuffer, EcsError, System, TickContext, World};
 use core_rng::RngCore;
 
-use crate::components::{Household, HouseholdMember, Identity, Needs};
+use crate::components::{Household, HouseholdMember, Identity, Needs, Personality};
 use crate::config::MortalityConfig;
+use crate::config::PeopleConfig;
 use crate::events::{DeathCause, PersonDied};
 
 /// RNG stream for mortality draws (one per citizen per day).
@@ -45,13 +46,55 @@ impl System for NeedsDecaySystem {
         _ctx: &TickContext,
         _cmd: &mut CommandBuffer,
     ) -> Result<(), EcsError> {
-        for (_, needs) in world.iter_mut::<Needs>()? {
+        let expected = self.decay_per_hour.len();
+        for (entity, needs) in world.iter_mut::<Needs>()? {
+            // Guard, not a silent zip-truncation: a saved vector that does
+            // not match the loaded data definitions is corrupt state
+            // (validated at load by `validate_town`; enforced here too).
+            if needs.levels.len() != expected {
+                return Err(EcsError::ComponentBlobMismatch(format!(
+                    "citizen #{} has {} need levels but data defines {expected}",
+                    entity.index(),
+                    needs.levels.len()
+                )));
+            }
             for (level, decay) in needs.levels.iter_mut().zip(&self.decay_per_hour) {
-                *level = level.saturating_sub(*decay).max(0);
+                *level = level.decay(*decay);
             }
         }
         Ok(())
     }
+}
+
+/// Validates a (freshly built or loaded) town against the loaded data
+/// definitions: every citizen's need and trait vectors must match the data
+/// order/length they will be interpreted under. Call after genesis and
+/// after loading a save (SPEC §8: a mismatch is a precise error, never a
+/// silent reinterpretation).
+pub fn validate_town(world: &World, config: &PeopleConfig) -> Result<(), EcsError> {
+    let needs_len = config.needs.needs.len();
+    for (entity, needs) in world.iter::<Needs>()? {
+        if needs.levels.len() != needs_len {
+            return Err(EcsError::ComponentBlobMismatch(format!(
+                "citizen #{} has {} need levels but data defines {needs_len} \
+                 (save/data mismatch)",
+                entity.index(),
+                needs.levels.len()
+            )));
+        }
+    }
+    let traits_len = config.traits.traits.len();
+    for (entity, personality) in world.iter::<Personality>()? {
+        if personality.weights.len() != traits_len {
+            return Err(EcsError::ComponentBlobMismatch(format!(
+                "citizen #{} has {} trait weights but data defines {traits_len} \
+                 (save/data mismatch)",
+                entity.index(),
+                personality.weights.len()
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Day-rate system: each citizen faces their age band's daily death
@@ -91,12 +134,7 @@ impl System for MortalitySystem {
         // Pass 1 (immutable): collect ages in entity-index order.
         let candidates: Vec<(core_ecs::Entity, u32)> = world
             .iter::<Identity>()?
-            .map(|(entity, identity)| {
-                (
-                    entity,
-                    identity.age_years(ctx.tick.raw(), self.ticks_per_year),
-                )
-            })
+            .map(|(entity, identity)| (entity, identity.age_years(ctx.tick, self.ticks_per_year)))
             .collect();
 
         // Pass 2: one draw per citizen, same order (the draw count and

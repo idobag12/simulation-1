@@ -10,7 +10,7 @@
 use core_ecs::{EcsError, Entity, World};
 use core_rng::RngCore;
 
-use crate::components::{Household, HouseholdMember, Identity, Needs, Personality, Sex};
+use crate::components::{Household, HouseholdMember, Identity, NeedLevel, Needs, Personality, Sex};
 use crate::config::PeopleConfig;
 
 /// RNG stream for all genesis draws.
@@ -28,6 +28,11 @@ fn in_range(value: u64, min: u64, max: u64) -> u64 {
 /// before any ticks.
 ///
 /// `ticks_per_year` comes from the calendar (age → birth_tick conversion).
+///
+/// Household sizes are drawn from `[household_min, household_max]`, except
+/// that the FINAL household absorbs however many citizens remain and may
+/// therefore be smaller than `household_min` (documented on
+/// `DemographicsConfig`; e.g. 10 citizens with sizes 4,4 leave a tail of 2).
 pub fn populate(
     world: &mut World,
     config: &PeopleConfig,
@@ -116,7 +121,11 @@ fn spawn_citizen(
     let mut levels = Vec::with_capacity(config.needs.needs.len());
     for def in &config.needs.needs {
         let draw = world.rng(GENESIS_STREAM).next_u64();
-        levels.push(in_range(draw, def.initial_min as u64, def.initial_max as u64) as i64);
+        levels.push(NeedLevel::new_clamped(in_range(
+            draw,
+            def.initial_min as u64,
+            def.initial_max as u64,
+        ) as i64));
     }
 
     let citizen = world.spawn();

@@ -98,6 +98,7 @@ dependencies = [
 name = "data_defs"
 version = "0.1.0"
 dependencies = [
+ "core_types",
  "ron",
  "serde",
  "sim_people",
@@ -304,7 +305,6 @@ dependencies = [
  "core_rng",
  "core_types",
  "serde",
- "thiserror",
 ]
 
 [[package]]

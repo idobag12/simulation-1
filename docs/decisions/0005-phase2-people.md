@@ -68,8 +68,11 @@ Households are entities carrying `Household`; citizens point at them via
 ## 5. Deterministic population generation
 
 `populate` (in `sim_people::genesis`) builds the initial town from
-`data/balance/demographics.ron` + `data/names/*.ron` using dedicated
-streams (`people.genesis.*`): ages sampled from data-defined weighted age
+`data/balance/demographics.ron` + `data/names/*.ron` using the dedicated
+`people.genesis` stream (one stream: genesis is a single generator with a
+fixed draw order, so per-concern sub-streams would add nothing —
+*amended during Phase 2 review; the original text said `people.genesis.*`*):
+ages sampled from data-defined weighted age
 bands, sex ~ data ratio, names drawn from data name lists, traits from
 data ranges, citizens grouped into households of data-defined size ranges.
 Iteration order is construction order; every draw comes from named
@@ -92,8 +95,16 @@ streams; same seed + same data ⇒ bit-identical town.
 - `data/names/given_female.ron`, `given_male.ron`, `family.ron`: name
   lists (non-empty, validated).
 - The year length in ticks depends on `calendar.ron`'s `days_per_season`;
-  age-in-years derives from the calendar. Validation cross-checks that
-  mortality/demographics band ages fit in u32 years.
+  age-in-years derives from the calendar. Validation cross-checks that the
+  largest data-defined age × the calendar year length fits tick arithmetic
+  (`validate_calendar_age_fit`), which is what makes the age math in
+  `sim_people` total.
+- Schema location (*amendment, Phase 2 review*): each sim crate owns its
+  config schema types (`sim_people::config` IS the RON schema), and
+  `data_defs` — a service-layer crate that may depend on sim crates under
+  SPEC §4's downward-only rule — loads and validates them. This keeps
+  schemas beside the code that interprets them and gives `data_defs` one
+  aggregation/validation seam.
 
 ## 7. Inspector v1 (headless queries, SPEC §13/§15)
 

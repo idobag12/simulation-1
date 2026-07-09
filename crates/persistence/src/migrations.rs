@@ -246,4 +246,47 @@ mod tests {
         }
         assert!(migrated.events.is_empty());
     }
+
+    /// ADR 0004 §10 content-continuity proof for the committed Phase 1
+    /// fixture: v2→v3 passes seed/tick/entities/RNG/original-component
+    /// bytes through verbatim, appends only the (empty) v3 stores, and the
+    /// events blob differs from the original by exactly the name-list
+    /// extension (byte-identical to `extend_registration_bytes` applied to
+    /// the original — the transformation `v2_to_v3` performs and
+    /// `extend_registration_bytes_is_lossless…` in core_events proves
+    /// touches nothing but the names).
+    #[test]
+    fn v2_fixture_content_survives_migration_verbatim() {
+        const V2_FIXTURE: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/v2_seed13_fixture60_tick2000.embersave"
+        ));
+        let payload = &V2_FIXTURE[crate::MAGIC.len() + 4..];
+        let raw = zstd::stream::decode_all(payload).expect("fixture decompresses");
+        let v2: SaveBodyV2 = codec::from_bytes(&raw).expect("fixture decodes as v2");
+        let original_events = v2.events.clone();
+        let original_components = v2.components.clone();
+
+        let migrated = migrate_to_current(2, raw).expect("migration");
+        assert_eq!(migrated.seed, Seed::new(13));
+        assert_eq!(migrated.tick, Ticks::new(2000));
+        assert_eq!(
+            &migrated.components[..original_components.len()],
+            &original_components
+        );
+        assert_eq!(
+            migrated.components.len(),
+            original_components.len() + V3_ADDED_COMPONENTS.len()
+        );
+        for (name, bytes) in &migrated.components[original_components.len()..] {
+            assert!(V3_ADDED_COMPONENTS.contains(&name.as_str()));
+            assert_eq!(*bytes, empty_store());
+        }
+        assert_eq!(
+            migrated.events,
+            core_events::extend_registration_bytes(&original_events, &V3_ADDED_EVENTS).unwrap(),
+            "events blob must differ by exactly the registration extension"
+        );
+        assert_ne!(migrated.events, original_events);
+    }
 }
