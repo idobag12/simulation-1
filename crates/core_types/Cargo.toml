@@ -1,0 +1,11 @@
+# Layer: core. May depend on: external crates only.
+[package]
+name = "core_types"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+bincode = { workspace = true }
+thiserror = { workspace = true }
