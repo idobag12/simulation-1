@@ -260,4 +260,52 @@ mod tests {
     fn different_seeds_hash_differently() {
         assert_ne!(sim(1).state_hash().unwrap(), sim(2).state_hash().unwrap());
     }
+
+    /// Event state is part of the hash domain (SPEC §9, ADR 0004 §§1, 5):
+    /// two worlds identical except for a scheduled entry — or except for a
+    /// pending emission — must hash differently. Pins
+    /// `World::hash_into`'s events frame directly, independent of the
+    /// re-recordable save_compat goldens.
+    #[test]
+    fn event_state_participates_in_the_world_hash() {
+        #[derive(serde::Serialize, serde::Deserialize)]
+        struct Ping;
+        impl core_ecs::Event for Ping {
+            const NAME: &'static str = "test.ping";
+        }
+
+        let mut base = sim(1);
+        let mut with_scheduled = sim(1);
+        let mut with_pending = sim(1);
+        for s in [&mut base, &mut with_scheduled, &mut with_pending] {
+            s.world_mut().register_event::<Ping>().unwrap();
+        }
+        assert_eq!(
+            base.state_hash().unwrap(),
+            with_scheduled.state_hash().unwrap(),
+            "identical worlds must hash equal before diverging"
+        );
+
+        with_scheduled
+            .world_mut()
+            .schedule_event(Ticks::new(500), &Ping)
+            .unwrap();
+        assert_ne!(
+            base.state_hash().unwrap(),
+            with_scheduled.state_hash().unwrap(),
+            "a scheduled entry must be observable in the world hash"
+        );
+
+        with_pending.world_mut().emit(&Ping).unwrap();
+        assert_ne!(
+            base.state_hash().unwrap(),
+            with_pending.state_hash().unwrap(),
+            "a pending emission must be observable in the world hash"
+        );
+        assert_ne!(
+            with_scheduled.state_hash().unwrap(),
+            with_pending.state_hash().unwrap(),
+            "scheduled and pending states must be distinguishable"
+        );
+    }
 }

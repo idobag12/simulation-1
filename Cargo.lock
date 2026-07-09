@@ -301,6 +301,7 @@ version = "0.1.0"
 dependencies = [
  "core_ecs",
  "core_types",
+ "serde",
  "thiserror",
 ]
 
