@@ -1,0 +1,19 @@
+# Layer: front. May depend on: persistence, sim_*, core_* + external crates.
+[package]
+name = "headless"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+core_types = { workspace = true }
+core_rng = { workspace = true }
+core_ecs = { workspace = true }
+sim_time = { workspace = true }
+persistence = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[[bin]]
+name = "embervale"
+path = "src/main.rs"
