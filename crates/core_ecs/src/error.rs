@@ -1,5 +1,6 @@
 //! Typed ECS errors (SPEC §3: no unwrap/expect in simulation code).
 
+use core_events::EventError;
 use core_types::ArithmeticError;
 use core_types::codec::CodecError;
 use thiserror::Error;
@@ -37,6 +38,10 @@ pub enum EcsError {
     /// Canonical encoding/decoding failed.
     #[error(transparent)]
     Codec(#[from] CodecError),
+
+    /// The event system failed (unregistered type, registration mismatch).
+    #[error(transparent)]
+    Event(#[from] EventError),
 
     /// Checked arithmetic overflowed inside a system or the tick loop.
     #[error(transparent)]

@@ -1,9 +1,9 @@
-//! The fixed-timestep tick loop (SPEC §5).
+//! The fixed-timestep tick loop and the calendar (SPEC §5).
 //!
-//! Phase 0 scope: drive the per-tick schedule and expose the canonical
-//! state hash. The `Calendar`, the future-callback `Scheduler`, the other
-//! schedule rates (hour/day/season/year), and the catch-up controller are
-//! Phase 1+ scope and do not exist yet (ADR 0002 §9).
+//! Phase 1 scope: multi-rate driving (tick/hour/day/season/year) via the
+//! `Calendar`, and the start-of-tick event transition (scheduled events
+//! fire, queues rotate; ADR 0004). The catch-up controller is Phase 8
+//! scope and does not exist yet.
 //!
 //! Invariants:
 //! - 1 tick = 1 simulated minute; the tick is the only unit of causality.
@@ -16,34 +16,96 @@
 #![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use core_ecs::{EcsError, Schedule, TickContext, World};
-use core_types::{Seed, StableHasher, Ticks, WorldHash};
+use core_types::calendar::{SEASONS_PER_YEAR, TICKS_PER_DAY};
+use core_types::{CalendarTime, Season, Seed, StableHasher, Ticks, WorldHash};
+use thiserror::Error;
 
-/// A running simulation: the world plus its tick counter.
+/// Errors constructing time infrastructure.
+#[derive(Debug, Error)]
+pub enum TimeError {
+    /// A calendar configuration value is out of its valid range.
+    #[error("invalid calendar config: {0}")]
+    InvalidConfig(String),
+}
+
+/// Converts ticks to calendar coordinates (SPEC §5, ADR 0004 §6).
+///
+/// Invariants:
+/// - Structure is definitional and fixed (1440 ticks/day, 4 seasons/year);
+///   the one tunable, `days_per_season`, comes from
+///   `data/balance/calendar.ron` and is ≥ 1.
+/// - Pure configuration: not world state, not saved; the application
+///   reconstructs it on load exactly like component registrations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Calendar {
+    days_per_season: u32,
+}
+
+impl Calendar {
+    /// Creates a calendar. Errors if `days_per_season` is zero.
+    pub fn new(days_per_season: u32) -> Result<Calendar, TimeError> {
+        if days_per_season == 0 {
+            return Err(TimeError::InvalidConfig(
+                "days_per_season must be >= 1".to_owned(),
+            ));
+        }
+        Ok(Calendar { days_per_season })
+    }
+
+    /// Days in one season (the tunable).
+    pub fn days_per_season(&self) -> u32 {
+        self.days_per_season
+    }
+
+    /// Decomposes a tick into calendar coordinates.
+    pub fn time_of(&self, tick: Ticks) -> CalendarTime {
+        let t = tick.raw();
+        let day = t / TICKS_PER_DAY;
+        let tick_of_day = t % TICKS_PER_DAY;
+        let season_length = u64::from(self.days_per_season);
+        let season_ordinal = day / season_length;
+        CalendarTime {
+            year: season_ordinal / SEASONS_PER_YEAR,
+            season: Season::from_index(season_ordinal % SEASONS_PER_YEAR),
+            day_of_season: (day % season_length) as u32,
+            // Casts are total: tick_of_day < 1440 bounds both fields.
+            hour: (tick_of_day / 60) as u8,
+            minute: (tick_of_day % 60) as u8,
+        }
+    }
+}
+
+/// A running simulation: the world, its tick counter, and its calendar.
 ///
 /// Invariants:
 /// - `tick` counts *completed* ticks; it is also the index the next tick
 ///   will execute as. Systems running during tick T observe
 ///   `ctx.tick == T`.
-/// - The schedule is passed in by the caller (it holds no world state and
-///   is not part of saved state; the application reconstructs it on load,
-///   exactly as it reconstructs component registrations).
+/// - The schedule and calendar are configuration, passed in / reconstructed
+///   by the application (they hold no world state and are not saved).
 pub struct Simulation {
     world: World,
+    calendar: Calendar,
     tick: Ticks,
 }
 
 impl Simulation {
-    /// Creates a fresh simulation at tick 0 with an empty world.
-    pub fn new(seed: Seed) -> Self {
+    /// Wraps an assembled world into a fresh simulation at tick 0.
+    pub fn new(world: World, calendar: Calendar) -> Self {
         Simulation {
-            world: World::new(seed),
+            world,
+            calendar,
             tick: Ticks::ZERO,
         }
     }
 
     /// Reassembles a simulation from loaded state. For `persistence` use.
-    pub fn from_parts(world: World, tick: Ticks) -> Self {
-        Simulation { world, tick }
+    pub fn from_parts(world: World, calendar: Calendar, tick: Ticks) -> Self {
+        Simulation {
+            world,
+            calendar,
+            tick,
+        }
     }
 
     /// The world.
@@ -67,11 +129,25 @@ impl Simulation {
         self.world.seed()
     }
 
-    /// Executes exactly one tick: every per-tick system in schedule order,
-    /// then advances the counter. On error the tick is aborted and the
-    /// counter does not advance.
+    /// The calendar.
+    pub fn calendar(&self) -> &Calendar {
+        &self.calendar
+    }
+
+    /// Executes exactly one tick, in the defined order (ADR 0004 §§3, 7):
+    /// 1. start-of-tick event transition (due scheduled events fire, queues
+    ///    rotate, log appends),
+    /// 2. every rate whose period begins this tick, coarsest-first, then
+    ///    tick systems — each system followed by its command buffer,
+    /// 3. the counter advances.
+    ///
+    /// On error the tick aborts and the counter does not advance.
     pub fn step(&mut self, schedule: &mut Schedule) -> Result<(), EcsError> {
-        let ctx = TickContext { tick: self.tick };
+        let ctx = TickContext {
+            tick: self.tick,
+            time: self.calendar.time_of(self.tick),
+        };
+        self.world.begin_tick(self.tick);
         schedule.run_tick(&mut self.world, &ctx)?;
         self.tick = self.tick.try_add(1)?;
         Ok(())
@@ -87,7 +163,7 @@ impl Simulation {
 
     /// The canonical world-state hash (SPEC §9 `hash_world()`): tick
     /// counter, then full world state (entities, every component store in
-    /// registration order, RNG stream states).
+    /// registration order, RNG stream states, event state).
     pub fn state_hash(&self) -> Result<WorldHash, EcsError> {
         let mut hasher = StableHasher::new();
         hasher.write_u64(self.tick.raw());
@@ -100,19 +176,75 @@ impl Simulation {
 mod tests {
     use super::*;
 
+    fn sim(seed: u64) -> Simulation {
+        // Test fixture parameters: 30-day seasons, log capacity 16.
+        Simulation::new(
+            World::new(Seed::new(seed), 16),
+            Calendar::new(30).expect("static test config"),
+        )
+    }
+
+    #[test]
+    fn zero_days_per_season_is_a_typed_error() {
+        assert!(matches!(Calendar::new(0), Err(TimeError::InvalidConfig(_))));
+    }
+
+    #[test]
+    fn calendar_golden_conversions() {
+        let cal = Calendar::new(30).expect("static test config");
+        assert_eq!(cal.time_of(Ticks::ZERO), CalendarTime::START);
+        assert_eq!(
+            cal.time_of(Ticks::new(1439)),
+            CalendarTime {
+                year: 0,
+                season: Season::Spring,
+                day_of_season: 0,
+                hour: 23,
+                minute: 59,
+            }
+        );
+        assert_eq!(
+            cal.time_of(Ticks::new(1440)),
+            CalendarTime {
+                year: 0,
+                season: Season::Spring,
+                day_of_season: 1,
+                hour: 0,
+                minute: 0,
+            }
+        );
+        // Day 30 begins Summer; 4 seasons of 30 days begin year 1.
+        assert_eq!(cal.time_of(Ticks::new(30 * 1440)).season, Season::Summer);
+        let year1 = cal.time_of(Ticks::new(4 * 30 * 1440));
+        assert_eq!(year1.year, 1);
+        assert_eq!(year1.season, Season::Spring);
+        assert!(year1.starts_year());
+    }
+
+    #[test]
+    fn boundary_flags_match_tick_arithmetic() {
+        let cal = Calendar::new(7).expect("static test config");
+        for t in 0..(2 * 7 * 1440) {
+            let time = cal.time_of(Ticks::new(t));
+            assert_eq!(time.starts_hour(), t % 60 == 0, "tick {t}");
+            assert_eq!(time.starts_day(), t % 1440 == 0, "tick {t}");
+            assert_eq!(time.starts_season(), t % (7 * 1440) == 0, "tick {t}");
+        }
+    }
+
     #[test]
     fn stepping_advances_the_tick_counter() {
-        let mut sim = Simulation::new(Seed::new(1));
+        let mut s = sim(1);
         let mut schedule = Schedule::new();
-        assert_eq!(sim.tick(), Ticks::ZERO);
-        sim.run_ticks(&mut schedule, 10).unwrap();
-        assert_eq!(sim.tick(), Ticks::new(10));
+        assert_eq!(s.tick(), Ticks::ZERO);
+        s.run_ticks(&mut schedule, 10).unwrap();
+        assert_eq!(s.tick(), Ticks::new(10));
     }
 
     #[test]
     fn hash_distinguishes_ticks_but_not_runs() {
-        let mut a = Simulation::new(Seed::new(7));
-        let mut b = Simulation::new(Seed::new(7));
+        let mut a = sim(7);
+        let mut b = sim(7);
         let mut schedule = Schedule::new();
 
         let h0 = a.state_hash().unwrap();
@@ -126,8 +258,6 @@ mod tests {
 
     #[test]
     fn different_seeds_hash_differently() {
-        let a = Simulation::new(Seed::new(1));
-        let b = Simulation::new(Seed::new(2));
-        assert_ne!(a.state_hash().unwrap(), b.state_hash().unwrap());
+        assert_ne!(sim(1).state_hash().unwrap(), sim(2).state_hash().unwrap());
     }
 }

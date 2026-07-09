@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn commands_apply_in_queue_order() {
-        let mut world = World::new(Seed::new(1));
+        let mut world = World::new(Seed::new(1), 16);
         world.register::<Marker>().unwrap();
         let e = world.spawn();
 
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn spawn_and_despawn_through_the_buffer() {
-        let mut world = World::new(Seed::new(1));
+        let mut world = World::new(Seed::new(1), 16);
         world.register::<Marker>().unwrap();
         let doomed = world.spawn();
 
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn command_on_entity_despawned_earlier_in_buffer_is_an_error() {
-        let mut world = World::new(Seed::new(1));
+        let mut world = World::new(Seed::new(1), 16);
         world.register::<Marker>().unwrap();
         let e = world.spawn();
 

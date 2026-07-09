@@ -4,8 +4,9 @@
 use std::any::TypeId;
 use std::collections::HashMap;
 
+use core_events::{Event, Events};
 use core_rng::{Pcg64, RngRegistry};
-use core_types::{Seed, StableHasher, codec};
+use core_types::{Seed, StableHasher, Ticks, codec};
 
 use crate::entity::{Entity, EntityAllocator};
 use crate::error::EcsError;
@@ -24,21 +25,27 @@ use crate::store::{Component, ErasedStore, StoreCell, StoreIter, StoreIterMut};
 /// - A component exists only for a live entity: `despawn` removes the
 ///   entity's components from every store at despawn time.
 /// - All randomness flows through [`World::rng`] named streams (SPEC §2).
+/// - Event state (bus queues, log ring, scheduler queue) is world state,
+///   owned here so systems can reach it and saves capture it (ADR 0004 §1).
 pub struct World {
     entities: EntityAllocator,
     stores: Vec<Box<dyn ErasedStore>>,
     by_type: HashMap<TypeId, usize>,
     rng: RngRegistry,
+    events: Events,
 }
 
 impl World {
-    /// Creates an empty world with no registered components.
-    pub fn new(seed: Seed) -> Self {
+    /// Creates an empty world with no registered components or events.
+    /// `event_log_capacity` is the log ring bound (a tunable from
+    /// `data/balance/engine.ron`, ADR 0004 §5).
+    pub fn new(seed: Seed, event_log_capacity: usize) -> Self {
         World {
             entities: EntityAllocator::new(),
             stores: Vec::new(),
             by_type: HashMap::new(),
             rng: RngRegistry::new(seed),
+            events: Events::new(event_log_capacity),
         }
     }
 
@@ -201,6 +208,42 @@ impl World {
         self.rng.stream(name)
     }
 
+    // --- Events (SPEC §7; ADR 0004) ---------------------------------------
+
+    /// Registers an event type. Registration order is part of the
+    /// save/hash format; call in one fixed order per application.
+    pub fn register_event<E: Event>(&mut self) -> Result<(), EcsError> {
+        Ok(self.events.register::<E>()?)
+    }
+
+    /// Emits a fact onto the bus; readable by every system during the next
+    /// tick (ADR 0004 §3).
+    pub fn emit<E: Event>(&mut self, event: &E) -> Result<(), EcsError> {
+        Ok(self.events.emit(event)?)
+    }
+
+    /// Schedules `event` for delivery at the start of tick `due`
+    /// (ADR 0004 §2).
+    pub fn schedule_event<E: Event>(&mut self, due: Ticks, event: &E) -> Result<(), EcsError> {
+        Ok(self.events.schedule(due, event)?)
+    }
+
+    /// This tick's readable events of type `E`, in delivery order.
+    pub fn events<E: Event>(&self) -> Result<Vec<E>, EcsError> {
+        Ok(self.events.read::<E>()?)
+    }
+
+    /// Tick-start event transition; called exactly once per tick by the
+    /// tick loop, before any system runs (ADR 0004 §3).
+    pub fn begin_tick(&mut self, tick: Ticks) {
+        self.events.begin_tick(tick);
+    }
+
+    /// Read access to the event system (log inspection for tooling).
+    pub fn event_system(&self) -> &Events {
+        &self.events
+    }
+
     // --- Persistence & hashing (consumed by `persistence`/`sim_time`) ----
 
     /// Canonical component blobs `(NAME, bytes)` in registration order.
@@ -256,9 +299,22 @@ impl World {
         Ok(())
     }
 
+    /// Canonical bytes of the full event state (queues, log ring, scheduler
+    /// queue, sequence counter; SPEC §9).
+    pub fn events_to_bytes(&self) -> Result<Vec<u8>, EcsError> {
+        Ok(self.events.to_bytes()?)
+    }
+
+    /// Restores event state from canonical bytes. Saved registration names
+    /// must match the live registration exactly.
+    pub fn restore_events(&mut self, bytes: &[u8]) -> Result<(), EcsError> {
+        Ok(self.events.restore(bytes)?)
+    }
+
     /// Absorbs the full world state into `hasher` in canonical order:
     /// entity allocator, then each store (name + contents) in registration
-    /// order, then RNG stream states. All fields are length-framed.
+    /// order, then RNG stream states, then event state. All fields are
+    /// length-framed. (Order extension in Phase 1: ADR 0004 §10.)
     pub fn hash_into(&self, hasher: &mut StableHasher) -> Result<(), EcsError> {
         hasher.write_frame(&self.entities_to_bytes()?);
         hasher.write_u64(self.stores.len() as u64);
@@ -266,6 +322,7 @@ impl World {
             store.hash_into(hasher)?;
         }
         hasher.write_frame(&self.rng_to_bytes()?);
+        self.events.hash_into(hasher)?;
         Ok(())
     }
 }
@@ -336,7 +393,7 @@ mod tests {
     }
 
     fn world_with_registrations() -> World {
-        let mut w = World::new(Seed::new(1));
+        let mut w = World::new(Seed::new(1), 16);
         w.register::<Position>().unwrap();
         w.register::<Label>().unwrap();
         w
@@ -454,7 +511,7 @@ mod tests {
         let blobs = w.component_blobs().unwrap();
 
         // World registered fewer components than the save.
-        let mut fewer = World::new(Seed::new(1));
+        let mut fewer = World::new(Seed::new(1), 16);
         fewer.register::<Position>().unwrap();
         assert!(matches!(
             fewer.load_component_blobs(&blobs),

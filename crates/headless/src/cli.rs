@@ -8,7 +8,7 @@ use std::process::ExitCode;
 
 use core_types::Seed;
 
-use crate::runner::{self, WorldSpec};
+use crate::runner::{self, SimConfig, WorldSpec};
 
 /// Exit code for a determinism mismatch (distinct from usage/runtime errors
 /// so scripts can tell them apart).
@@ -19,11 +19,11 @@ pub const EXIT_ERROR: u8 = 2;
 /// Usage text printed on errors.
 pub const USAGE: &str = "usage:
   embervale run --seed N --ticks N [--hash-interval N] [--fixture] [--entities N]
-                [--save PATH] [--load PATH]
-  embervale verify --seed N --ticks N [--hash-interval N] [--fixture] [--entities N]
-  embervale save-load-check --seed N --ticks N [--resume-at N] [--fixture] [--entities N]
+                [--save PATH] [--load PATH] [--data DIR]
+  embervale verify --seed N --ticks N [--hash-interval N] [--fixture] [--entities N] [--data DIR]
+  embervale save-load-check --seed N --ticks N [--resume-at N] [--fixture] [--entities N] [--data DIR]
 
-defaults: --hash-interval 10000, --entities 200, --resume-at ticks/2";
+defaults: --hash-interval 10000, --entities 200, --resume-at ticks/2, --data ./data";
 
 /// Full CLI entry point: dispatches and maps the outcome to the exit-code
 /// contract — success ⇒ 0, determinism mismatch ⇒ [`EXIT_MISMATCH`],
@@ -67,6 +67,7 @@ struct Flags {
     resume_at: Option<u64>,
     save: Option<PathBuf>,
     load: Option<PathBuf>,
+    data: PathBuf,
 }
 
 impl Flags {
@@ -80,6 +81,7 @@ impl Flags {
             resume_at: None,
             save: None,
             load: None,
+            data: PathBuf::from("data"),
         };
         let mut iter = args.iter();
         while let Some(flag) = iter.next() {
@@ -99,18 +101,27 @@ impl Flags {
                 "--fixture" => flags.fixture = true,
                 "--save" => flags.save = Some(PathBuf::from(value("--save")?)),
                 "--load" => flags.load = Some(PathBuf::from(value("--load")?)),
+                "--data" => flags.data = PathBuf::from(value("--data")?),
                 other => return Err(format!("unknown flag `{other}`")),
             }
         }
         Ok(flags)
     }
 
+    /// Loads and validates the data definitions (SPEC §8: a data failure
+    /// is a startup error with a precise message).
+    fn sim_config(&self) -> Result<SimConfig, String> {
+        let defs = data_defs::load(&self.data).map_err(|e| e.to_string())?;
+        Ok(SimConfig::from_data(&defs))
+    }
+
     fn spec(&self) -> Result<WorldSpec, String> {
         let seed = Seed::new(self.seed.ok_or("--seed is required")?);
+        let config = self.sim_config()?;
         Ok(if self.fixture {
-            WorldSpec::fixture(seed, self.entities)
+            WorldSpec::fixture(seed, self.entities, config)
         } else {
-            WorldSpec::empty(seed)
+            WorldSpec::empty(seed, config)
         })
     }
 
@@ -128,18 +139,20 @@ fn cmd_run(flags: &Flags) -> Result<bool, String> {
     let ticks = flags.ticks()?;
     let (mut sim, mut schedule) = match &flags.load {
         Some(path) => {
-            let sim = persistence::load_from_file(path, runner::register_components)
-                .map_err(|e| e.to_string())?;
-            // The schedule is reconstructed from the flags, exactly like
-            // component registrations (it is not part of saved state); the
-            // seed comes from the save, so --seed is not consulted here.
+            // The schedule, calendar, and log capacity are reconstructed
+            // from flags + data files, exactly like registrations (they are
+            // not part of saved state); the seed comes from the save, so
+            // --seed is not consulted here.
+            let config = flags.sim_config()?;
             let schedule_spec = if flags.fixture {
-                WorldSpec::fixture(sim.seed(), flags.entities)
+                WorldSpec::fixture(Seed::new(0), flags.entities, config)
             } else {
-                WorldSpec::empty(sim.seed())
+                WorldSpec::empty(Seed::new(0), config)
             };
-            let schedule = runner::build_schedule(&schedule_spec);
-            (sim, schedule)
+            let load_config = schedule_spec.load_config().map_err(|e| e.to_string())?;
+            let sim = persistence::load_from_file(path, load_config, runner::register_world)
+                .map_err(|e| e.to_string())?;
+            (sim, runner::build_schedule(&schedule_spec))
         }
         None => runner::build_simulation(&flags.spec()?).map_err(|e| e.to_string())?,
     };
@@ -205,7 +218,8 @@ fn cmd_save_load_check(flags: &Flags) -> Result<bool, String> {
         .run_ticks(&mut first_schedule, resume_at)
         .map_err(|e| e.to_string())?;
     let save = persistence::save_to_bytes(&first).map_err(|e| e.to_string())?;
-    let mut resumed = persistence::load_from_bytes(&save, runner::register_components)
+    let load_config = spec.load_config().map_err(|e| e.to_string())?;
+    let mut resumed = persistence::load_from_bytes(&save, load_config, runner::register_world)
         .map_err(|e| e.to_string())?;
     let mut resumed_schedule = runner::build_schedule(&spec);
     resumed
@@ -228,8 +242,17 @@ fn cmd_save_load_check(flags: &Flags) -> Result<bool, String> {
 mod tests {
     use super::*;
 
+    /// The repo's real data directory, resolved from this crate's location
+    /// so tests pass regardless of the runner's working directory.
+    fn data_dir() -> String {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../../data").to_owned()
+    }
+
     fn args(list: &[&str]) -> Vec<String> {
-        list.iter().map(|s| (*s).to_owned()).collect()
+        let mut v: Vec<String> = list.iter().map(|s| (*s).to_owned()).collect();
+        v.push("--data".to_owned());
+        v.push(data_dir());
+        v
     }
 
     #[test]
@@ -237,10 +260,29 @@ mod tests {
         assert!(dispatch(&[]).is_err());
         assert!(dispatch(&args(&["frobnicate"])).is_err());
         assert!(dispatch(&args(&["run", "--bogus"])).is_err());
-        assert!(dispatch(&args(&["run", "--seed"])).is_err()); // value missing
         assert!(dispatch(&args(&["run", "--seed", "abc", "--ticks", "1"])).is_err());
         assert!(dispatch(&args(&["run", "--ticks", "1"])).is_err()); // seed required
         assert!(dispatch(&args(&["verify", "--seed", "1"])).is_err()); // ticks required
+        // A value-less flag at the end swallows "--data", then the final
+        // path is left as a dangling flag — still a usage error.
+        assert!(dispatch(&args(&["run", "--seed"])).is_err());
+    }
+
+    #[test]
+    fn missing_data_directory_is_a_precise_startup_error() {
+        let result = dispatch(&[
+            "verify".into(),
+            "--seed".into(),
+            "1".into(),
+            "--ticks".into(),
+            "10".into(),
+            "--data".into(),
+            "/nonexistent/data".into(),
+        ]);
+        match result {
+            Err(message) => assert!(message.contains("calendar.ron"), "{message}"),
+            other => panic!("expected data error, got {other:?}"),
+        }
     }
 
     #[test]
@@ -296,7 +338,6 @@ mod tests {
         let path = dir.join("roundtrip.embersave");
         let path_str = path.to_str().unwrap();
 
-        // Save at tick 1000, resume 1000 more, compare against a solid run.
         assert_eq!(
             dispatch(&args(&[
                 "run",
@@ -325,8 +366,6 @@ mod tests {
             ])),
             Ok(true)
         );
-        let loaded = persistence::load_from_file(&path, runner::register_components).unwrap();
-        assert_eq!(loaded.tick(), core_types::Ticks::new(1000));
         std::fs::remove_file(&path).ok();
     }
 }

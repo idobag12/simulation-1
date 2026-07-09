@@ -10,6 +10,9 @@
 
 use std::process::Command;
 
+/// The repo's real data directory, resolved from this crate's location.
+const DATA: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../data");
+
 fn embervale() -> Command {
     Command::new(env!("CARGO_BIN_EXE_embervale"))
 }
@@ -28,6 +31,8 @@ fn verify_passes_with_exit_zero_and_prints_pass() {
             "50",
             "--hash-interval",
             "250",
+            "--data",
+            DATA,
         ])
         .output()
         .expect("failed to spawn embervale");
@@ -41,8 +46,8 @@ fn usage_errors_exit_two_with_usage_on_stderr() {
     for bad in [
         vec![],
         vec!["frobnicate"],
-        vec!["run", "--ticks", "10"], // --seed missing
-        vec!["run", "--seed", "nope", "--ticks", "10"],
+        vec!["run", "--ticks", "10", "--data", DATA], // --seed missing
+        vec!["run", "--seed", "nope", "--ticks", "10", "--data", DATA],
     ] {
         let out = embervale().args(&bad).output().expect("spawn failed");
         assert_eq!(out.status.code(), Some(2), "args: {bad:?}");
@@ -70,6 +75,8 @@ fn run_prints_csv_and_save_load_round_trips_through_files() {
             "50",
             "--hash-interval",
             "1000",
+            "--data",
+            DATA,
         ])
         .output()
         .expect("spawn failed");
@@ -93,6 +100,8 @@ fn run_prints_csv_and_save_load_round_trips_through_files() {
             "50",
             "--save",
             save.to_str().expect("path utf8"),
+            "--data",
+            DATA,
         ])
         .output()
         .expect("spawn failed");
@@ -106,6 +115,8 @@ fn run_prints_csv_and_save_load_round_trips_through_files() {
             "--ticks",
             "1000",
             "--fixture",
+            "--data",
+            DATA,
         ])
         .output()
         .expect("spawn failed");
@@ -129,6 +140,8 @@ fn loading_a_missing_file_reports_io_error_and_exits_two() {
             "/nonexistent/nowhere.embersave",
             "--ticks",
             "1",
+            "--data",
+            DATA,
         ])
         .output()
         .expect("spawn failed");

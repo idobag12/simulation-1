@@ -27,5 +27,9 @@ pub use command::CommandBuffer;
 pub use entity::{Entity, EntityAllocator};
 pub use error::EcsError;
 pub use store::{Component, StorageKind};
-pub use system::{Schedule, System, TickContext};
+pub use system::{Rate, Schedule, System, TickContext};
 pub use world::{ComponentIter, ComponentIterMut, World};
+
+// Re-exported so sim crates use the event system through the ECS surface
+// without a direct core_events dependency line of their own.
+pub use core_events::{Event, EventError};

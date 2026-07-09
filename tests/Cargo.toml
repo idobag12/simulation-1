@@ -17,3 +17,4 @@ core_ecs = { workspace = true }
 sim_time = { workspace = true }
 persistence = { workspace = true }
 headless = { workspace = true }
+serde = { workspace = true }

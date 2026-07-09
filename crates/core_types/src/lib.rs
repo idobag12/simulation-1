@@ -13,12 +13,14 @@
 #![warn(missing_docs)]
 #![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+pub mod calendar;
 pub mod codec;
 pub mod error;
 pub mod hash;
 pub mod money;
 pub mod ticks;
 
+pub use calendar::{CalendarTime, Season};
 pub use error::ArithmeticError;
 pub use hash::{StableHasher, WorldHash};
 pub use money::Money;

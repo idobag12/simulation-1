@@ -1,0 +1,6 @@
+// Engine tunables (SPEC §8).
+EngineConfig(
+    // Maximum retained entries in the event log ring (ADR 0004 §5).
+    // Observability reach only — cannot affect simulation trajectories.
+    event_log_capacity: 4096,
+)

@@ -11,6 +11,7 @@ core_rng = { workspace = true }
 core_ecs = { workspace = true }
 sim_time = { workspace = true }
 persistence = { workspace = true }
+data_defs = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 

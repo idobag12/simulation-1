@@ -10,9 +10,11 @@
 //! fixture parameters, not balance tunables (SPEC §8 applies to sim
 //! crates; this is the tooling layer).
 
-use core_ecs::{CommandBuffer, Component, EcsError, StorageKind, System, TickContext, World};
+use core_ecs::{
+    CommandBuffer, Component, EcsError, Event, StorageKind, System, TickContext, World,
+};
 use core_rng::RngCore;
-use core_types::Money;
+use core_types::{Money, Ticks};
 
 /// Dense-store fixture component: a random-walking balance plus a step
 /// counter. Dense because (nearly) every fixture entity carries it.
@@ -46,6 +48,34 @@ impl Component for FixtureTag {
     const STORAGE: StorageKind = StorageKind::Sparse;
 }
 
+/// Fixture event emitted by [`FixtureWalkSystem`] on any tick whose
+/// population changed — exercises the bus (emit → next-tick read) in every
+/// fixture run. Fixture tooling, not simulation content (ADR 0002 §10).
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FixtureChurn {
+    /// Entities spawned this tick.
+    pub spawned: u32,
+    /// Entities despawned this tick.
+    pub despawned: u32,
+}
+
+impl Event for FixtureChurn {
+    const NAME: &'static str = "fixture.churn";
+}
+
+/// Fixture event delivered by the scheduler; [`FixtureAlarmSystem`]
+/// re-schedules the next one, so a self-perpetuating alarm chain exercises
+/// schedule → fire → read → re-schedule in every fixture run.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct FixtureAlarm {
+    /// How many alarms have fired before this one.
+    pub generation: u64,
+}
+
+impl Event for FixtureAlarm {
+    const NAME: &'static str = "fixture.alarm";
+}
+
 // Fixture parameters (not balance tunables, ADR 0002 §10):
 // each tick, every entity's balance moves by a draw in
 // [-WALK_SPAN/2, +WALK_SPAN/2] mills…
@@ -59,6 +89,8 @@ const POP_MIN: usize = 100;
 const POP_MAX: usize = 400;
 // Initial balances are seeded in [0, INITIAL_WEALTH_SPAN) mills.
 const INITIAL_WEALTH_SPAN: u64 = 100_000;
+// Ticks between self-perpetuating fixture alarms.
+const ALARM_INTERVAL: u64 = 97;
 
 /// Name of the RNG stream the walk system draws from.
 pub const WALK_STREAM: &str = "fixture.walk";
@@ -66,8 +98,9 @@ pub const WALK_STREAM: &str = "fixture.walk";
 pub const SEED_STREAM: &str = "fixture.seed";
 
 /// Spawns `count` fixture entities with RNG-derived balances; entities from
-/// even draws also get a [`FixtureTag`]. Deterministic given the world's
-/// seed. Call once at world assembly, before any ticks.
+/// even draws also get a [`FixtureTag`]. Schedules the first
+/// [`FixtureAlarm`] so the alarm chain starts. Deterministic given the
+/// world's seed. Call once at world assembly, before any ticks.
 pub fn populate(world: &mut World, count: u32) -> Result<(), EcsError> {
     for _ in 0..count {
         let draw = world.rng(SEED_STREAM).next_u64();
@@ -83,7 +116,36 @@ pub fn populate(world: &mut World, count: u32) -> Result<(), EcsError> {
             world.insert(entity, FixtureTag { label: draw })?;
         }
     }
+    world.schedule_event(Ticks::new(ALARM_INTERVAL), &FixtureAlarm { generation: 0 })?;
     Ok(())
+}
+
+/// Fixture system that reads this tick's [`FixtureAlarm`]s and schedules
+/// the next link of the chain, exercising the scheduler continuously.
+///
+/// Invariant: stateless between runs (SPEC §6); the chain's state is the
+/// scheduled entry itself.
+pub struct FixtureAlarmSystem;
+
+impl System for FixtureAlarmSystem {
+    fn name(&self) -> &'static str {
+        "fixture.alarm"
+    }
+
+    fn run(
+        &mut self,
+        world: &mut World,
+        ctx: &TickContext,
+        _cmd: &mut CommandBuffer,
+    ) -> Result<(), EcsError> {
+        for alarm in world.events::<FixtureAlarm>()? {
+            let next = FixtureAlarm {
+                generation: alarm.generation.saturating_add(1),
+            };
+            world.schedule_event(ctx.tick.try_add(ALARM_INTERVAL)?, &next)?;
+        }
+        Ok(())
+    }
 }
 
 /// The fixture's per-tick system: random-walks every balance and churns the
@@ -139,6 +201,12 @@ impl System for FixtureWalkSystem {
                 });
                 spawned += 1;
             }
+        }
+        if spawned > 0 || despawned > 0 {
+            world.emit(&FixtureChurn {
+                spawned: spawned as u32,
+                despawned: despawned as u32,
+            })?;
         }
         Ok(())
     }

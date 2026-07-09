@@ -1,0 +1,6 @@
+// Calendar tunables (SPEC §8). Structure (1440 ticks/day, 4 seasons/year)
+// is definitional and lives in code; only genuinely tunable values go here.
+CalendarConfig(
+    // Days in each of the four seasons (year length = 4 × this).
+    days_per_season: 30,
+)

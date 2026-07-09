@@ -1,6 +1,4 @@
-# Layer: service. May depend on: core_* + external crates (ron).
-# Empty shell until Phase 1; dependencies are added in the phase that builds
-# it (ADR 0001). New external dependencies require an ADR (SPEC §2).
+# Layer: service. May depend on: core_* + external crates (ron: ADR 0004).
 [package]
 name = "data_defs"
 version.workspace = true
@@ -8,3 +6,6 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+ron = { workspace = true }

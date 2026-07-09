@@ -1,4 +1,5 @@
-# Layer: core. May depend on: core_types, core_rng + external crates only.
+# Layer: core. May depend on: core_types, core_rng, core_events + external
+# crates only.
 [package]
 name = "core_ecs"
 version.workspace = true
@@ -8,5 +9,6 @@ publish.workspace = true
 [dependencies]
 core_types = { workspace = true }
 core_rng = { workspace = true }
+core_events = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
