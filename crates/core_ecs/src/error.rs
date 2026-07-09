@@ -35,6 +35,13 @@ pub enum EcsError {
     #[error("internal store corruption: {0}")]
     InternalCorruption(&'static str),
 
+    /// A simulation invariant that must never break was found broken — a
+    /// conserved quantity drifted or a ledger stopped balancing (SPEC §12:
+    /// auditors halt the run, debug and release; a violation is never
+    /// ignorable). The message names the identity and the diff.
+    #[error("invariant violation: {0}")]
+    InvariantViolation(String),
+
     /// Canonical encoding/decoding failed.
     #[error(transparent)]
     Codec(#[from] CodecError),

@@ -75,6 +75,12 @@ fn citizen_report(
             out.push_str(&format!("  {:<16} {weight}\n", def.id));
         }
     }
+    if let Some(wallet) = world
+        .get::<core_ecs::sim_interface::Wallet>(entity)
+        .map_err(err)?
+    {
+        out.push_str(&format!("wallet: {}\n", wallet.cash));
+    }
     if let Some(member) = world
         .get::<sim_people::HouseholdMember>(entity)
         .map_err(err)?
@@ -153,6 +159,22 @@ fn activity_report(world: &World, defs: &DataDefs, entity: Entity) -> Result<Str
             sim_ai::CurrentAction::Idle { remaining } => {
                 format!("doing: idling ({remaining} ticks left)\n")
             }
+            sim_ai::CurrentAction::BuyTravel { target, remaining } => format!(
+                "doing: heading to {} to buy ({remaining} ticks left)\n",
+                location_label(world, defs, *target)?,
+            ),
+            sim_ai::CurrentAction::BuyPending { at } => {
+                format!("doing: buying at {}\n", location_label(world, defs, *at)?,)
+            }
+            sim_ai::CurrentAction::Consume {
+                at,
+                need_index,
+                remaining,
+            } => format!(
+                "doing: consuming a purchase for {} at {} ({remaining} ticks left)\n",
+                need_name(defs, *need_index),
+                location_label(world, defs, *at)?,
+            ),
         };
         out.push_str(&line);
     }
@@ -178,6 +200,14 @@ fn activity_report(world: &World, defs: &DataDefs, entity: Entity) -> Result<Str
                     location_label(world, defs, location)?
                 ),
                 sim_ai::CandidateAction::Idle => "idle".into(),
+                sim_ai::CandidateAction::Buy {
+                    location,
+                    need_index,
+                } => format!(
+                    "buy for {} at {}",
+                    need_name(defs, need_index),
+                    location_label(world, defs, location)?
+                ),
             };
             out.push_str(&format!(
                 " {marker} {what}: {} micro\n",
@@ -246,6 +276,96 @@ pub fn demography(sim: &Simulation, defs: &DataDefs) -> Result<String, String> {
 /// Counts live citizens (the `Identity` store population).
 pub fn population(world: &World) -> Result<u32, core_ecs::EcsError> {
     Ok(world.iter::<sim_people::Identity>()?.count() as u32)
+}
+
+/// Renders the town's economy: every firm's posted price, stock, cash,
+/// and books; the conservation counters; and the live audit verdict
+/// (SPEC §13 — the Phase 4 observables).
+pub fn economy(sim: &Simulation, defs: &DataDefs) -> Result<String, String> {
+    use core_ecs::sim_interface::{EconCounters, FirmBooks, Inventory, Wallet};
+
+    let world = sim.world();
+    let good_name = |good: usize| {
+        defs.goods
+            .goods
+            .get(good)
+            .map(|g| g.id.as_str())
+            .unwrap_or("<unknown good>")
+    };
+
+    let mut out = format!("tick {}: economy\n", sim.tick());
+    let mut firm_count = 0;
+    for (entity, firm) in world.iter::<sim_economy::Firm>().map_err(err)? {
+        firm_count += 1;
+        let kind = defs
+            .firms
+            .kinds
+            .get(firm.kind as usize)
+            .map(|k| k.id.as_str())
+            .unwrap_or("<unknown kind>");
+        let output = defs
+            .recipes
+            .recipes
+            .get(firm.recipe as usize)
+            .map(|r| r.output.good_id.as_str())
+            .unwrap_or("<unknown>");
+        out.push_str(&format!(
+            "firm #{} {kind}: posts {output} at {}\n",
+            entity.index(),
+            firm.posted_price
+        ));
+        if let Some(wallet) = world.get::<Wallet>(entity).map_err(err)? {
+            out.push_str(&format!("  cash {}", wallet.cash));
+        }
+        if let Some(books) = world.get::<FirmBooks>(entity).map_err(err)? {
+            out.push_str(&format!(
+                " | revenue {} expenses {}",
+                books.revenue, books.expenses
+            ));
+        }
+        out.push('\n');
+        if let Some(inventory) = world.get::<Inventory>(entity).map_err(err)? {
+            out.push_str("  stock:");
+            for (good, quantity) in inventory.quantities.iter().enumerate() {
+                if *quantity > 0 {
+                    out.push_str(&format!(" {} {}", good_name(good), quantity));
+                }
+            }
+            out.push('\n');
+        }
+    }
+    if firm_count == 0 {
+        out.push_str("no firms (pre-economy world)\n");
+    }
+
+    if let Some((_, counters)) = world.iter::<EconCounters>().map_err(err)?.next() {
+        out.push_str(&format!("issued: {}\n", counters.issued));
+        out.push_str("counters (produced/citizens/production/spoiled):\n");
+        for good in 0..counters.produced.len() {
+            out.push_str(&format!(
+                "  {:<10} {} / {} / {} / {}\n",
+                good_name(good),
+                counters.produced.get(good).copied().unwrap_or(0),
+                counters
+                    .consumed_by_citizens
+                    .get(good)
+                    .copied()
+                    .unwrap_or(0),
+                counters
+                    .consumed_in_production
+                    .get(good)
+                    .copied()
+                    .unwrap_or(0),
+                counters.spoiled.get(good).copied().unwrap_or(0),
+            ));
+        }
+    }
+    match debug_tools::audit_economy(world) {
+        Ok(true) => out.push_str("audit: PASS\n"),
+        Ok(false) => out.push_str("audit: no economy to audit\n"),
+        Err(e) => out.push_str(&format!("audit: FAIL — {e}\n")),
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

@@ -2,8 +2,10 @@
 //! (day rate). Explicit order and rates are wired by the application's
 //! schedule builder (SPEC §6).
 
-use core_ecs::{CommandBuffer, EcsError, System, TickContext, World};
+use core_ecs::sim_interface::{EconCounters, Wallet};
+use core_ecs::{CommandBuffer, EcsError, Entity, System, TickContext, World};
 use core_rng::RngCore;
+use core_types::Money;
 
 use crate::components::{Household, HouseholdMember, Identity, Needs, Personality};
 use crate::config::MortalityConfig;
@@ -147,22 +149,56 @@ impl System for MortalitySystem {
                     person: entity,
                     cause: DeathCause::OldAge,
                 })?;
-                let member = world.get::<HouseholdMember>(entity)?.copied();
-                if let Some(member) = member {
-                    let household = member.household;
-                    cmd.run(move |w| {
-                        if let Some(h) = w.get_mut::<Household>(household)? {
-                            h.members.retain(|m| *m != entity);
-                            if h.members.is_empty() {
-                                w.despawn(household)?;
-                            }
-                        }
-                        Ok(())
-                    });
-                }
+                let household = world
+                    .get::<HouseholdMember>(entity)?
+                    .map(|member| member.household);
+                // Household bookkeeping and the estate settle in one
+                // deferred step, immediately before the despawn in the
+                // same buffer (the deceased is still alive when it runs).
+                cmd.run(move |w| settle_death(w, entity, household));
                 cmd.despawn(entity);
             }
         }
         Ok(())
     }
+}
+
+/// Removes the deceased from their household (despawning it if emptied)
+/// and passes their estate on (ADR 0007 §8a): to the lowest-indexed
+/// surviving household member, else to the ledger entity's escheat
+/// wallet. Money is never destroyed — `Σ wallets == issued` holds across
+/// deaths. Pre-economy worlds have no wallets: nothing to settle.
+fn settle_death(w: &mut World, entity: Entity, household: Option<Entity>) -> Result<(), EcsError> {
+    let mut heir: Option<Entity> = None;
+    if let Some(household) = household
+        && let Some(h) = w.get_mut::<Household>(household)?
+    {
+        h.members.retain(|m| *m != entity);
+        heir = h.members.first().copied();
+        if h.members.is_empty() {
+            w.despawn(household)?;
+        }
+    }
+    let estate = w.get::<Wallet>(entity)?.map(|wallet| wallet.cash);
+    if let Some(estate) = estate
+        && estate != Money::ZERO
+    {
+        let recipient = match heir {
+            Some(heir) => Some(heir),
+            // Unclaimed: the ledger's escheat wallet (ADR 0007 §8a).
+            None => w.iter::<EconCounters>()?.next().map(|(ledger, _)| ledger),
+        };
+        if let Some(recipient) = recipient {
+            match w.get_mut::<Wallet>(recipient)? {
+                Some(wallet) => wallet.cash = wallet.cash.try_add(estate)?,
+                None => {
+                    w.insert(recipient, Wallet { cash: estate })?;
+                }
+            }
+            if let Some(wallet) = w.get_mut::<Wallet>(entity)? {
+                wallet.cash = Money::ZERO;
+            }
+        }
+    }
+    Ok(())
 }

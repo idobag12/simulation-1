@@ -115,21 +115,60 @@ fn v3_to_v4(mut v3: SaveBodyV3) -> Result<SaveBody, PersistError> {
     Ok(v3)
 }
 
+/// Format v4 body (Phase 3), FROZEN. Structurally identical to v5 — the
+/// v4→v5 difference is the registration set, not the body shape.
+type SaveBodyV4 = SaveBody;
+
+// Registration growth from v4 to v5 (Phase 4, ADR 0007 §9). Historical
+// facts of the format, frozen here forever.
+const V5_ADDED_COMPONENTS: [&str; 7] = [
+    "econ.wallet",
+    "goods.inventory",
+    "econ.retail_offer",
+    "econ.firm",
+    "econ.firm_books",
+    "econ.counters",
+    "econ.production",
+];
+const V5_ADDED_EVENTS: [&str; 2] = ["econ.goods_purchased", "econ.price_changed"];
+
+/// Pure step v4 → v5 (ADR 0007 §9): the registration grew by the economy
+/// components and events, all appended after the v4 set. A v4 world
+/// carried none of them, so each new store is empty and the event-name
+/// list extends losslessly. (A migrated town therefore has no wallets,
+/// firms, or ledger — it honestly has no economy; the auditor reports
+/// "nothing to audit" and the economy systems no-op over empty stores.)
+fn v4_to_v5(mut v4: SaveBodyV4) -> Result<SaveBody, PersistError> {
+    let empty_store = codec::to_bytes(&Vec::<(u32, u8)>::new())?;
+    for name in V5_ADDED_COMPONENTS {
+        v4.components.push((name.to_owned(), empty_store.clone()));
+    }
+    if !v4.events.is_empty() {
+        v4.events = core_events::extend_registration_bytes(&v4.events, &V5_ADDED_EVENTS)
+            .map_err(EcsError::from)?;
+    }
+    Ok(v4)
+}
+
 /// Migrates a decompressed save body from `version` to the current
-/// [`SaveBody`], chaining pure steps (`v1 → v2 → v3 → v4`).
+/// [`SaveBody`], chaining pure steps (`v1 → v2 → v3 → v4 → v5`).
 pub(crate) fn migrate_to_current(version: u32, raw: Vec<u8>) -> Result<SaveBody, PersistError> {
     match version {
         1 => {
             let v1: SaveBodyV1 = codec::from_bytes(&raw)?;
-            v3_to_v4(v2_to_v3(v1_to_v2(v1))?)
+            v4_to_v5(v3_to_v4(v2_to_v3(v1_to_v2(v1))?)?)
         }
         2 => {
             let v2: SaveBodyV2 = codec::from_bytes(&raw)?;
-            v3_to_v4(v2_to_v3(v2)?)
+            v4_to_v5(v3_to_v4(v2_to_v3(v2)?)?)
         }
         3 => {
             let v3: SaveBodyV3 = codec::from_bytes(&raw)?;
-            v3_to_v4(v3)
+            v4_to_v5(v3_to_v4(v3)?)
+        }
+        4 => {
+            let v4: SaveBodyV4 = codec::from_bytes(&raw)?;
+            v4_to_v5(v4)
         }
         FORMAT_VERSION => Ok(codec::from_bytes(&raw)?),
         other => Err(PersistError::UnsupportedVersion(other)),
@@ -150,6 +189,7 @@ mod tests {
         V3_ADDED_COMPONENTS
             .iter()
             .chain(V4_ADDED_COMPONENTS.iter())
+            .chain(V5_ADDED_COMPONENTS.iter())
             .copied()
             .collect()
     }
@@ -218,7 +258,8 @@ mod tests {
         let v3 = migrate_to_current(2, raw).unwrap();
         assert_eq!(v3.components.len(), 1 + all_appended().len());
 
-        // The migrated blob restores strictly into the grown registration.
+        // The migrated blob restores strictly into the grown registration
+        // (the full current set: people + economy events appended).
         let mut grown = core_events::Events::new(8);
         grown.register::<Churn>().unwrap();
         grown.register::<Alarm>().unwrap();
@@ -227,7 +268,19 @@ mod tests {
         impl core_events::Event for Died {
             const NAME: &'static str = "people.person_died";
         }
+        #[derive(Debug, serde::Serialize, serde::Deserialize)]
+        struct Bought(u8);
+        impl core_events::Event for Bought {
+            const NAME: &'static str = "econ.goods_purchased";
+        }
+        #[derive(Debug, serde::Serialize, serde::Deserialize)]
+        struct Repriced(u8);
+        impl core_events::Event for Repriced {
+            const NAME: &'static str = "econ.price_changed";
+        }
         grown.register::<Died>().unwrap();
+        grown.register::<Bought>().unwrap();
+        grown.register::<Repriced>().unwrap();
         grown.restore(&v3.events).unwrap();
         assert_eq!(grown.scheduled_count(), 1);
     }
@@ -330,17 +383,23 @@ mod tests {
             assert!(appended.contains(&name.as_str()));
             assert_eq!(*bytes, empty_store());
         }
+        let expected_events = core_events::extend_registration_bytes(
+            &core_events::extend_registration_bytes(&original_events, &V3_ADDED_EVENTS).unwrap(),
+            &V5_ADDED_EVENTS,
+        )
+        .unwrap();
         assert_eq!(
-            migrated.events,
-            core_events::extend_registration_bytes(&original_events, &V3_ADDED_EVENTS).unwrap(),
-            "events blob must differ by exactly the registration extension"
+            migrated.events, expected_events,
+            "events blob must differ by exactly the chained registration extensions"
         );
         assert_ne!(migrated.events, original_events);
     }
 
     /// ADR 0004 §10 content-continuity proof for the committed Phase 2
-    /// fixture: v3→v4 passes every field through verbatim except the six
-    /// appended (empty) world/AI stores; the events blob is untouched.
+    /// fixture: the v3→current chain passes every field through verbatim
+    /// except the appended (empty) world/AI + economy stores; the events
+    /// blob differs by exactly the v5 name-list extension (v3→v4 added no
+    /// events).
     #[test]
     fn v3_fixture_content_survives_migration_verbatim() {
         const V3_FIXTURE: &[u8] = include_bytes!(concat!(
@@ -360,17 +419,62 @@ mod tests {
             &migrated.components[..original_components.len()],
             &original_components
         );
+        let appended: Vec<&str> = V4_ADDED_COMPONENTS
+            .iter()
+            .chain(V5_ADDED_COMPONENTS.iter())
+            .copied()
+            .collect();
         assert_eq!(
             migrated.components.len(),
-            original_components.len() + V4_ADDED_COMPONENTS.len()
+            original_components.len() + appended.len()
         );
         for (name, bytes) in &migrated.components[original_components.len()..] {
-            assert!(V4_ADDED_COMPONENTS.contains(&name.as_str()));
+            assert!(appended.contains(&name.as_str()));
             assert_eq!(*bytes, empty_store());
         }
         assert_eq!(
-            migrated.events, original_events,
-            "v3→v4 adds no events; the blob must pass through untouched"
+            migrated.events,
+            core_events::extend_registration_bytes(&original_events, &V5_ADDED_EVENTS).unwrap(),
+            "the events blob must differ by exactly the v5 registration extension"
         );
+    }
+
+    /// ADR 0004 §10 content-continuity proof for the committed Phase 3
+    /// fixture: v4→v5 passes every field through verbatim except the
+    /// seven appended (empty) economy stores; the events blob differs by
+    /// exactly the v5 name-list extension.
+    #[test]
+    fn v4_fixture_content_survives_migration_verbatim() {
+        const V4_FIXTURE: &[u8] = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/fixtures/v4_seed23_fixture30_citizens250_tick2500.embersave"
+        ));
+        let payload = &V4_FIXTURE[crate::MAGIC.len() + 4..];
+        let raw = zstd::stream::decode_all(payload).expect("fixture decompresses");
+        let v4: SaveBodyV4 = codec::from_bytes(&raw).expect("fixture decodes as v4");
+        let original_events = v4.events.clone();
+        let original_components = v4.components.clone();
+
+        let migrated = migrate_to_current(4, raw).expect("migration");
+        assert_eq!(migrated.seed, Seed::new(23));
+        assert_eq!(migrated.tick, Ticks::new(2500));
+        assert_eq!(
+            &migrated.components[..original_components.len()],
+            &original_components
+        );
+        assert_eq!(
+            migrated.components.len(),
+            original_components.len() + V5_ADDED_COMPONENTS.len()
+        );
+        for (name, bytes) in &migrated.components[original_components.len()..] {
+            assert!(V5_ADDED_COMPONENTS.contains(&name.as_str()));
+            assert_eq!(*bytes, empty_store());
+        }
+        assert_eq!(
+            migrated.events,
+            core_events::extend_registration_bytes(&original_events, &V5_ADDED_EVENTS).unwrap(),
+            "the events blob must differ by exactly the v5 registration extension"
+        );
+        assert_ne!(migrated.events, original_events);
     }
 }

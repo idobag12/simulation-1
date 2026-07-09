@@ -1,6 +1,6 @@
 # Layer: service. May depend on: sim_*, core_* + external crates.
-# Empty shell until Phase 2+; dependencies are added in the phase that builds
-# it (ADR 0001). New external dependencies require an ADR (SPEC §2).
+# Built from Phase 4 (ADR 0007: the conservation auditors live here,
+# SPEC §13). New external dependencies require an ADR (SPEC §2).
 [package]
 name = "debug_tools"
 version.workspace = true
@@ -8,3 +8,5 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+core_types = { workspace = true }
+core_ecs = { workspace = true }

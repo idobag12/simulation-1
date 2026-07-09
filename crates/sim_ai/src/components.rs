@@ -36,6 +36,32 @@ pub enum CurrentAction {
         /// Ticks of idling left.
         remaining: u32,
     },
+    /// En route to `target` to buy from its retail offer (Phase 4,
+    /// ADR 0007 §6). Variants below are APPENDED — old saves' encoded
+    /// variant indices are unchanged.
+    BuyTravel {
+        /// The retail firm's location entity.
+        target: Entity,
+        /// Ticks of travel left.
+        remaining: u32,
+    },
+    /// At the shop; the atomic purchase executes on this tick's act run.
+    /// If stock or cash changed since deciding, it aborts to a fresh
+    /// decision — no partial transaction, ever (ADR 0007 §6).
+    BuyPending {
+        /// The retail firm entity.
+        at: Entity,
+    },
+    /// Consuming a purchased unit (the need gain landed with the
+    /// purchase; these ticks are the data-defined eating/using time).
+    Consume {
+        /// Where the unit was bought.
+        at: Entity,
+        /// The need it satisfied (data order index) — for inspection.
+        need_index: u32,
+        /// Ticks of consumption left.
+        remaining: u32,
+    },
 }
 
 impl Component for CurrentAction {
@@ -96,6 +122,14 @@ pub enum CandidateAction {
     },
     /// Do nothing for a while.
     Idle,
+    /// Buy one unit from `location`'s retail offer to satisfy
+    /// `need_index` (appended variant; Phase 4, ADR 0007 §6).
+    Buy {
+        /// The retail firm's location entity.
+        location: Entity,
+        /// Need (data order index) the purchase satisfies.
+        need_index: u32,
+    },
 }
 
 /// The full scored candidate list of a citizen's most recent decision —
@@ -103,7 +137,8 @@ pub enum CandidateAction {
 ///
 /// Invariant: `chosen` indexes `candidates`; candidates appear in
 /// enumeration order (own home first, then public locations in entity
-/// order, each in satisfier data order, `Idle` last).
+/// order, each in satisfier data order, then purchases in retail-entity
+/// order, `Idle` last).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LastDecision {
     /// Tick the decision was made.

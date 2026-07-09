@@ -3,7 +3,9 @@
 //! actions, `ActSystem` (tick rate, after decide) advances them with
 //! exact integer effects.
 
-use core_ecs::sim_interface::{Location, NeedLevel, Needs, Personality, Position, Residence};
+use core_ecs::sim_interface::{
+    Inventory, Location, NeedLevel, Needs, Personality, Position, Residence, RetailOffer, Wallet,
+};
 use core_ecs::{CommandBuffer, EcsError, Entity, System, TickContext, World};
 use core_types::Ticks;
 use core_types::calendar::MINUTES_PER_HOUR;
@@ -28,6 +30,16 @@ struct Decider {
     at: Option<Entity>,
     home: Option<Entity>,
     asleep_window: bool,
+    cash_mills: i64,
+}
+
+/// One retail offer snapshotted for scoring: the selling entity, the
+/// offer, and its stock at decide time (rechecked atomically at purchase
+/// time — a stale snapshot aborts cleanly, ADR 0007 §6).
+struct OfferSnapshot {
+    seller: Entity,
+    offer: RetailOffer,
+    stock: i64,
 }
 
 /// Hour-rate system: at the data-defined compile hour, every citizen
@@ -133,12 +145,32 @@ impl DecideSystem {
         };
 
         let gain = recoverable as f64 / MICRO;
+        let time_cost = (travel_ticks + perform_ticks) as f64
+            * self.tables.time_cost_micro_per_tick as f64
+            / MICRO;
+        let sleep_bias = if is_own_home_rest && asleep_window {
+            self.tables.sleep_home_bias_micro as f64 / MICRO
+        } else {
+            0.0
+        };
+
+        gain * self.urgency(deficit) * self.trait_factor(traits, need_index) - time_cost
+            + sleep_bias
+    }
+
+    /// `deficit^exponent` in tank fractions (the SPEC §11 nonlinearity).
+    fn urgency(&self, deficit: i64) -> f64 {
         let deficit_frac = deficit as f64 / MICRO;
         let mut urgency = 1.0f64;
         for _ in 0..self.tables.urgency_exponent {
             urgency *= deficit_frac;
         }
-        let trait_factor = match self
+        urgency
+    }
+
+    /// The personality amplifier for `need_index` (1.0 when unmapped).
+    fn trait_factor(&self, traits: &[i16], need_index: u32) -> f64 {
+        match self
             .tables
             .need_trait
             .get(need_index as usize)
@@ -155,27 +187,53 @@ impl DecideSystem {
                 1.0 + (f64::from(weight_per_mille) / 1000.0) * trait_value
             }
             None => 1.0,
+        }
+    }
+
+    /// Scores buying one unit from `snapshot` (ADR 0007 §6): the gain a
+    /// unit's satisfaction offers against time cost AND money cost —
+    /// `price × mu`, where the marginal utility of wealth
+    /// `mu = mu_scale / (1 + wallet/half_wealth)` makes the same price
+    /// weigh more on a thin wallet. Float discipline: `+ − × ÷` only.
+    fn score_buy(&self, decider: &Decider, snapshot: &OfferSnapshot) -> f64 {
+        let offer = &snapshot.offer;
+        let level = decider
+            .needs
+            .get(offer.need_index as usize)
+            .copied()
+            .unwrap_or(NEED_MAX);
+        let deficit = (NEED_MAX - level).max(0);
+        let recoverable = deficit.min(offer.gain_per_unit.max(0));
+        if recoverable <= 0 {
+            return f64::MIN;
+        }
+        let travel_ticks = if decider.at == Some(snapshot.seller) {
+            0
+        } else {
+            i64::from(self.tables.travel_ticks)
         };
-        let time_cost = (travel_ticks + perform_ticks) as f64
+        let gain = recoverable as f64 / MICRO;
+        let time_cost = (travel_ticks + i64::from(offer.use_ticks)) as f64
             * self.tables.time_cost_micro_per_tick as f64
             / MICRO;
-        let sleep_bias = if is_own_home_rest && asleep_window {
-            self.tables.sleep_home_bias_micro as f64 / MICRO
-        } else {
-            0.0
-        };
+        let mu = (self.tables.mu_scale_micro as f64 / MICRO)
+            / (1.0 + decider.cash_mills as f64 / self.tables.half_wealth_mills as f64);
+        let money_cost = offer.unit_price.mills() as f64 * mu;
 
-        gain * urgency * trait_factor - time_cost + sleep_bias
+        gain * self.urgency(deficit) * self.trait_factor(&decider.traits, offer.need_index)
+            - time_cost
+            - money_cost
     }
 
     /// Enumerates and scores a decider's candidates; returns the dump and
     /// the chosen action. Enumeration order (= tie-break order, SPEC §11):
     /// own home (satisfier data order), public locations (entity order ×
-    /// satisfier data order), Idle last.
+    /// satisfier data order), purchases (retail-entity order), Idle last.
     fn decide(
         &self,
         decider: &Decider,
         publics: &[(Entity, u32)],
+        offers: &[OfferSnapshot],
         home_kind: Option<u32>,
     ) -> (LastDecision, CurrentAction) {
         let mut candidates: Vec<ScoredCandidate> = Vec::new();
@@ -220,6 +278,22 @@ impl DecideSystem {
         for (location, kind) in publics {
             push(*location, *kind, decider, self);
         }
+        for snapshot in offers {
+            // Skipped at decide time (ADR 0007 §6): nothing on the shelf,
+            // or the citizen cannot pay the posted price.
+            if snapshot.stock < 1 || decider.cash_mills < snapshot.offer.unit_price.mills() {
+                continue;
+            }
+            let score = self.score_buy(decider, snapshot);
+            candidates.push(ScoredCandidate {
+                action: CandidateAction::Buy {
+                    location: snapshot.seller,
+                    need_index: snapshot.offer.need_index,
+                },
+                score_micro: quantize(score),
+            });
+            scores.push(score);
+        }
         candidates.push(ScoredCandidate {
             action: CandidateAction::Idle,
             score_micro: 0,
@@ -256,6 +330,16 @@ impl DecideSystem {
             CandidateAction::Idle => CurrentAction::Idle {
                 remaining: self.tables.idle_ticks,
             },
+            CandidateAction::Buy { location, .. } => {
+                if decider.at == Some(location) {
+                    CurrentAction::BuyPending { at: location }
+                } else {
+                    CurrentAction::BuyTravel {
+                        target: location,
+                        remaining: self.tables.travel_ticks,
+                    }
+                }
+            }
         };
         (
             LastDecision {
@@ -312,6 +396,23 @@ impl System for DecideSystem {
             .map(|(entity, location)| (entity, location.kind))
             .collect();
 
+        // Snapshot retail offers with their current stock (entity order).
+        let offers: Vec<OfferSnapshot> = {
+            let mut list = Vec::new();
+            for (seller, offer) in world.iter::<RetailOffer>()? {
+                let stock = world
+                    .get::<Inventory>(seller)?
+                    .map(|inventory| inventory.stock(offer.good))
+                    .unwrap_or(0);
+                list.push(OfferSnapshot {
+                    seller,
+                    offer: *offer,
+                    stock,
+                });
+            }
+            list
+        };
+
         // Pass 1 (immutable): snapshot citizens that need a decision.
         let mut deciders: Vec<Decider> = Vec::new();
         for (entity, needs) in world.iter::<Needs>()? {
@@ -332,12 +433,16 @@ impl System for DecideSystem {
                 at: world.get::<Position>(entity)?.map(|p| p.at),
                 home: world.get::<Residence>(entity)?.map(|r| r.home),
                 asleep_window,
+                cash_mills: world
+                    .get::<Wallet>(entity)?
+                    .map(|wallet| wallet.cash.mills())
+                    .unwrap_or(0),
             });
         }
 
         // Pass 2: decide and write (entity order preserved).
         for decider in deciders {
-            let (mut dump, action) = self.decide(&decider, &publics, home_kind);
+            let (mut dump, action) = self.decide(&decider, &publics, &offers, home_kind);
             dump.tick = ctx.tick;
             world.insert(decider.entity, action)?;
             world.insert(decider.entity, dump)?;

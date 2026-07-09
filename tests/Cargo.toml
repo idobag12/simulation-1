@@ -18,6 +18,9 @@ core_rng = { workspace = true }
 core_ecs = { workspace = true }
 sim_time = { workspace = true }
 sim_ai = { workspace = true }
+sim_economy = { workspace = true }
+sim_goods = { workspace = true }
+debug_tools = { workspace = true }
 sim_people = { workspace = true }
 persistence = { workspace = true }
 headless = { workspace = true }

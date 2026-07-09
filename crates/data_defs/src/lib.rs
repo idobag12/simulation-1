@@ -85,6 +85,14 @@ pub struct DataDefs {
     pub locations: sim_world::config::LocationsConfig,
     /// Utility-AI tunables (Phase 3, ADR 0006 §7).
     pub ai: sim_ai::config::AiConfig,
+    /// Good definitions (Phase 4, ADR 0007 §7).
+    pub goods: sim_goods::config::GoodsConfig,
+    /// Recipes (Phase 4, ADR 0007 §7).
+    pub recipes: sim_economy::config::RecipesConfig,
+    /// Firm kinds (Phase 4, ADR 0007 §7).
+    pub firms: sim_economy::config::FirmsConfig,
+    /// Posted-price market tunables (Phase 4, ADR 0007 §7).
+    pub economy: sim_economy::config::EconomyConfig,
 }
 
 /// Loads and validates every data definition from a `data/` directory
@@ -104,16 +112,28 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
     };
     let locations: sim_world::config::LocationsConfig = load_ron(&data_root.join("locations.ron"))?;
     let ai: sim_ai::config::AiConfig = load_ron(&data_root.join("balance/ai.ron"))?;
+    let goods: sim_goods::config::GoodsConfig = load_ron(&data_root.join("goods.ron"))?;
+    let recipes: sim_economy::config::RecipesConfig = load_ron(&data_root.join("recipes.ron"))?;
+    let firms: sim_economy::config::FirmsConfig = load_ron(&data_root.join("firms.ron"))?;
+    let economy: sim_economy::config::EconomyConfig =
+        load_ron(&data_root.join("balance/economy.ron"))?;
     validate(data_root, &calendar, &engine)?;
     validate_people(data_root, &calendar, &people)?;
     validate_locations(data_root, &locations, &people)?;
     validate_ai(data_root, &ai, &people, &locations)?;
+    validate_economy(
+        data_root, &goods, &recipes, &firms, &economy, &people, &locations,
+    )?;
     Ok(DataDefs {
         calendar,
         engine,
         people,
         locations,
         ai,
+        goods,
+        recipes,
+        firms,
+        economy,
     })
 }
 
@@ -130,8 +150,10 @@ fn load_ron<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, DataError>
 
 mod resolve;
 mod validate;
-pub use resolve::resolve_ai;
+mod validate_econ;
+pub use resolve::{resolve_ai, resolve_economy};
 use validate::{validate, validate_ai, validate_locations, validate_people};
+use validate_econ::validate_economy;
 
 #[cfg(test)]
 #[path = "tests.rs"]

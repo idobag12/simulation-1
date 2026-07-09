@@ -22,6 +22,12 @@ AiConfig(
         // Score bias for sleeping at home during the window.
         home_bias_micro: 400000,
     ),
+    purchase: PurchaseDef(
+        // Score micro-units one mill costs a penniless citizen; halves
+        // for every half_wealth on hand: mu = scale/(1 + wallet/half).
+        mu_scale_micro: 250,
+        half_wealth_mills: 20000,
+    ),
     need_trait_weights: [
         NeedTraitWeight(need_id: "social",  trait_id: "sociability", weight_per_mille: 900),
         NeedTraitWeight(need_id: "purpose", trait_id: "ambition",    weight_per_mille: 900),

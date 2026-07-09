@@ -1,0 +1,28 @@
+// Firm kinds (ADR 0007 §§1–2, 7). Order here IS the stable firm-kind id.
+// Genesis creates `count` instances per kind, seeds cash (recorded as
+// issuance) and stock (recorded as produced). A `retail` block makes the
+// firm a citizen-facing location selling its output good.
+FirmsConfig(kinds: [
+    FirmDef(id: "farm",   count: 2, recipe_id: "harvest_grain",
+            initial_cash_mills: 50000, initial_inventory: [], initial_price_mills: 40, retail: None),
+    FirmDef(id: "well",   count: 2, recipe_id: "draw_water",
+            initial_cash_mills: 50000, initial_inventory: [], initial_price_mills: 25, retail: None),
+    FirmDef(id: "forest", count: 1, recipe_id: "fell_timber",
+            initial_cash_mills: 50000, initial_inventory: [], initial_price_mills: 70, retail: None),
+    FirmDef(id: "mill",   count: 2, recipe_id: "mill_flour",
+            initial_cash_mills: 60000,
+            initial_inventory: [GoodQty(good_id: "grain", quantity: 40)],
+            initial_price_mills: 90, retail: None),
+    FirmDef(id: "bakery", count: 3, recipe_id: "bake_bread",
+            initial_cash_mills: 80000,
+            initial_inventory: [GoodQty(good_id: "flour", quantity: 60), GoodQty(good_id: "water", quantity: 60), GoodQty(good_id: "bread", quantity: 40)],
+            initial_price_mills: 220,
+            retail: Some(RetailDef(location_kind_id: "bakery", need_id: "hunger",
+                                   gain_per_unit: 450000, use_ticks: 30))),
+    FirmDef(id: "woodyard", count: 1, recipe_id: "split_firewood",
+            initial_cash_mills: 60000,
+            initial_inventory: [GoodQty(good_id: "timber", quantity: 20), GoodQty(good_id: "firewood", quantity: 30)],
+            initial_price_mills: 130,
+            retail: Some(RetailDef(location_kind_id: "woodyard", need_id: "shelter",
+                                   gain_per_unit: 500000, use_ticks: 20))),
+])

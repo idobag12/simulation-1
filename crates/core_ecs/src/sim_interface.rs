@@ -10,6 +10,12 @@ use serde::{Deserialize, Serialize};
 use crate::entity::Entity;
 use crate::store::{Component, StorageKind};
 
+#[path = "sim_interface_econ.rs"]
+mod econ;
+pub use econ::{
+    EconCounters, FirmBooks, GoodsPurchased, Inventory, PriceChanged, RetailOffer, Wallet,
+};
+
 /// One need level in per-million units (ADR 0005 §2): 0 = fully depleted,
 /// [`NeedLevel::MAX`] = fully satisfied.
 ///

@@ -102,6 +102,8 @@ dependencies = [
  "ron",
  "serde",
  "sim_ai",
+ "sim_economy",
+ "sim_goods",
  "sim_people",
  "sim_world",
  "thiserror",
@@ -110,6 +112,10 @@ dependencies = [
 [[package]]
 name = "debug_tools"
 version = "0.1.0"
+dependencies = [
+ "core_ecs",
+ "core_types",
+]
 
 [[package]]
 name = "embervale-tests"
@@ -119,10 +125,13 @@ dependencies = [
  "core_rng",
  "core_types",
  "data_defs",
+ "debug_tools",
  "headless",
  "persistence",
  "serde",
  "sim_ai",
+ "sim_economy",
+ "sim_goods",
  "sim_people",
  "sim_time",
 ]
@@ -152,9 +161,12 @@ dependencies = [
  "core_rng",
  "core_types",
  "data_defs",
+ "debug_tools",
  "persistence",
  "serde",
  "sim_ai",
+ "sim_economy",
+ "sim_goods",
  "sim_people",
  "sim_time",
  "sim_world",
@@ -298,10 +310,20 @@ dependencies = [
 [[package]]
 name = "sim_economy"
 version = "0.1.0"
+dependencies = [
+ "core_ecs",
+ "core_types",
+ "serde",
+]
 
 [[package]]
 name = "sim_goods"
 version = "0.1.0"
+dependencies = [
+ "core_ecs",
+ "core_types",
+ "serde",
+]
 
 [[package]]
 name = "sim_lod"

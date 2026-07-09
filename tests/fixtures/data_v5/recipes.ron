@@ -1,0 +1,14 @@
+// Recipes (ADR 0007 §1): the production chain. Harvest recipes (no
+// inputs) are the explicit modeled goods sources. Firms run one batch at
+// a time; outputs land batch_hours after inputs are consumed.
+RecipesConfig(recipes: [
+    RecipeDef(id: "harvest_grain",  inputs: [], output: GoodQty(good_id: "grain",  quantity: 10), batch_hours: 2),
+    RecipeDef(id: "draw_water",     inputs: [], output: GoodQty(good_id: "water",  quantity: 12), batch_hours: 2),
+    RecipeDef(id: "fell_timber",    inputs: [], output: GoodQty(good_id: "timber", quantity: 6),  batch_hours: 2),
+    RecipeDef(id: "mill_flour",     inputs: [GoodQty(good_id: "grain", quantity: 4)],
+              output: GoodQty(good_id: "flour", quantity: 12), batch_hours: 2),
+    RecipeDef(id: "bake_bread",     inputs: [GoodQty(good_id: "flour", quantity: 4), GoodQty(good_id: "water", quantity: 4)],
+              output: GoodQty(good_id: "bread", quantity: 16), batch_hours: 2),
+    RecipeDef(id: "split_firewood", inputs: [GoodQty(good_id: "timber", quantity: 2)],
+              output: GoodQty(good_id: "firewood", quantity: 8), batch_hours: 2),
+])

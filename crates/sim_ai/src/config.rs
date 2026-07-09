@@ -23,6 +23,20 @@ pub struct SleepDef {
     pub home_bias_micro: i64,
 }
 
+/// Purchase-scoring tunables (Phase 4, ADR 0007 §6): the marginal
+/// utility of wealth converts a posted price into a score cost —
+/// `mu = (mu_scale_micro / 1e6) / (1 + wallet / half_wealth_mills)` —
+/// so the same price weighs more on a thin wallet (SPEC §11's money
+/// cost).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PurchaseDef {
+    /// Score micro-units one mill costs a penniless citizen.
+    pub mu_scale_micro: i64,
+    /// Wealth (mills) at which money matters half as much.
+    pub half_wealth_mills: i64,
+}
+
 /// Maps a need to the personality trait that amplifies its utility
 /// (SPEC §11: traits are weights in scoring).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -57,6 +71,8 @@ pub struct AiConfig {
     pub plan_compile_hour: u8,
     /// Sleep-schedule tunables.
     pub sleep: SleepDef,
+    /// Purchase-scoring tunables (Phase 4).
+    pub purchase: PurchaseDef,
     /// Need→trait scoring weights.
     pub need_trait_weights: Vec<NeedTraitWeight>,
 }
@@ -102,6 +118,10 @@ pub struct AiTables {
     /// Per need index: the trait that amplifies it `(trait index, weight
     /// per-mille)`, if any.
     pub need_trait: Vec<Option<(u32, u32)>>,
+    /// See [`PurchaseDef::mu_scale_micro`].
+    pub mu_scale_micro: i64,
+    /// See [`PurchaseDef::half_wealth_mills`].
+    pub half_wealth_mills: i64,
 }
 
 impl AiTables {

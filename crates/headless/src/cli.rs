@@ -29,6 +29,7 @@ pub const USAGE: &str = "usage:
                 [--citizens N] [--data DIR]
   embervale inspect --load PATH --entity INDEX [--data DIR]
   embervale demography --load PATH [--data DIR]
+  embervale economy --load PATH [--data DIR]
 
 defaults: --hash-interval 10000, --entities 200, --citizens 0,
           --resume-at ticks/2, --data ./data
@@ -65,6 +66,7 @@ pub fn dispatch(args: &[String]) -> Result<bool, String> {
         "save-load-check" => cmd_save_load_check(&flags),
         "inspect" => cmd_inspect(&flags),
         "demography" => cmd_demography(&flags),
+        "economy" => cmd_economy(&flags),
         other => Err(format!("unknown subcommand `{other}`")),
     }
 }
@@ -330,6 +332,13 @@ fn cmd_demography(flags: &Flags) -> Result<bool, String> {
     let defs = flags.defs()?;
     let sim = load_sim(flags, &defs)?;
     print!("{}", inspect::demography(&sim, &defs)?);
+    Ok(true)
+}
+
+fn cmd_economy(flags: &Flags) -> Result<bool, String> {
+    let defs = flags.defs()?;
+    let sim = load_sim(flags, &defs)?;
+    print!("{}", inspect::economy(&sim, &defs)?);
     Ok(true)
 }
 

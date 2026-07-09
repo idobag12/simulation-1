@@ -1,7 +1,11 @@
 //! `ActSystem`: advances every `CurrentAction` with exact integer effects
-//! (split from `systems.rs` for the SPEC §3 module-size rule).
+//! (split from `systems.rs` for the SPEC §3 module-size rule). Purchases
+//! execute here, atomically, at performance start (ADR 0007 §6).
 
-use core_ecs::sim_interface::{Location, Needs, Position};
+use core_ecs::sim_interface::{
+    EconCounters, FirmBooks, GoodsPurchased, Inventory, Location, Needs, Position, RetailOffer,
+    Wallet,
+};
 use core_ecs::{CommandBuffer, EcsError, Entity, System, TickContext, World};
 
 use crate::components::CurrentAction;
@@ -22,6 +26,12 @@ enum Transition {
         next: Option<CurrentAction>,
     },
     Finish,
+    /// Attempt the atomic purchase at `at` — resolved in the apply pass
+    /// against LIVE stock and cash, sequentially in entity order, so two
+    /// buyers in the same tick can never oversell a shelf.
+    Purchase {
+        at: Entity,
+    },
 }
 
 /// Tick-rate system (after `DecideSystem`): advances every
@@ -74,6 +84,35 @@ impl ActSystem {
                             remaining: self.tables.max_perform_ticks,
                         },
                     }
+                }
+            }
+            CurrentAction::BuyTravel { target, remaining } => {
+                if remaining > 1 {
+                    Transition::Continue(CurrentAction::BuyTravel {
+                        target,
+                        remaining: remaining - 1,
+                    })
+                } else {
+                    Transition::Arrive {
+                        at: target,
+                        next: CurrentAction::BuyPending { at: target },
+                    }
+                }
+            }
+            CurrentAction::BuyPending { at } => Transition::Purchase { at },
+            CurrentAction::Consume {
+                at,
+                need_index,
+                remaining,
+            } => {
+                if remaining > 1 {
+                    Transition::Continue(CurrentAction::Consume {
+                        at,
+                        need_index,
+                        remaining: remaining - 1,
+                    })
+                } else {
+                    Transition::Finish
                 }
             }
             CurrentAction::Perform {
@@ -168,8 +207,97 @@ impl System for ActSystem {
                 Transition::Finish => {
                     world.remove::<CurrentAction>(entity)?;
                 }
+                Transition::Purchase { at } => {
+                    execute_purchase(world, entity, at)?;
+                }
             }
         }
         Ok(())
     }
+}
+
+/// Executes one retail purchase atomically (ADR 0007 §§4, 6), or aborts
+/// it cleanly: if the offer is gone, the shelf is empty, or the buyer can
+/// no longer pay (state moved during travel), the action is simply
+/// removed — a fresh decision follows next tick, and NOTHING was
+/// transferred. On success, wallets, the seller's books and stock, the
+/// conservation counters, the buyer's need, and the event all move in
+/// this one call.
+fn execute_purchase(world: &mut World, buyer: Entity, seller: Entity) -> Result<(), EcsError> {
+    let offer = match world.get::<RetailOffer>(seller)? {
+        Some(offer) => *offer,
+        None => {
+            world.remove::<CurrentAction>(buyer)?;
+            return Ok(());
+        }
+    };
+    let stock = world
+        .get::<Inventory>(seller)?
+        .map(|inventory| inventory.stock(offer.good))
+        .unwrap_or(0);
+    let cash = world
+        .get::<Wallet>(buyer)?
+        .map(|wallet| wallet.cash.mills())
+        .unwrap_or(0);
+    let price = offer.unit_price;
+    if stock < 1 || cash < price.mills() {
+        world.remove::<CurrentAction>(buyer)?;
+        return Ok(());
+    }
+    // A retail offer only exists in worlds seeded with a conservation
+    // ledger; selling without one would be uncounted consumption.
+    let ledger = world
+        .iter::<EconCounters>()?
+        .next()
+        .map(|(entity, _)| entity)
+        .ok_or_else(|| {
+            EcsError::InvariantViolation(
+                "a retail purchase ran in a world without an EconCounters ledger".to_owned(),
+            )
+        })?;
+
+    // The atomic transaction (ADR 0007 §4): money…
+    if let Some(wallet) = world.get_mut::<Wallet>(buyer)? {
+        wallet.cash = wallet.cash.try_sub(price)?;
+    }
+    if let Some(wallet) = world.get_mut::<Wallet>(seller)? {
+        wallet.cash = wallet.cash.try_add(price)?;
+    }
+    if let Some(books) = world.get_mut::<FirmBooks>(seller)? {
+        books.revenue = books.revenue.try_add(price)?;
+    }
+    // …goods (one unit off the shelf, counted as citizen consumption)…
+    if let Some(inventory) = world.get_mut::<Inventory>(seller)?
+        && let Some(stock) = inventory.quantities.get_mut(offer.good as usize)
+    {
+        *stock -= 1;
+    }
+    if let Some(counters) = world.get_mut::<EconCounters>(ledger)?
+        && let Some(consumed) = counters.consumed_by_citizens.get_mut(offer.good as usize)
+    {
+        *consumed += 1;
+    }
+    // …the satisfaction the unit buys (clamped exact gain)…
+    if let Some(needs) = world.get_mut::<Needs>(buyer)?
+        && let Some(level) = needs.levels.get_mut(offer.need_index as usize)
+    {
+        *level = level.gain(offer.gain_per_unit);
+    }
+    // …and the fact.
+    world.emit(&GoodsPurchased {
+        buyer,
+        seller,
+        good: offer.good,
+        quantity: 1,
+        total: price,
+    })?;
+    world.insert(
+        buyer,
+        CurrentAction::Consume {
+            at: seller,
+            need_index: offer.need_index,
+            remaining: offer.use_ticks,
+        },
+    )?;
+    Ok(())
 }

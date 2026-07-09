@@ -132,6 +132,12 @@ pub struct DemographicsConfig {
     /// Regression band: maximum acceptable annualized crude death rate
     /// (per-mille of initial population).
     pub annual_death_rate_max_per_mille: u32,
+    /// Genesis wealth range lower bound, mills (Phase 4, ADR 0007 §2:
+    /// citizens buy food with seeded wealth; the seeded sum is recorded
+    /// as issuance).
+    pub wealth_min_mills: i64,
+    /// Genesis wealth range upper bound, mills.
+    pub wealth_max_mills: i64,
 }
 
 /// `data/names/*.ron` — authored name lists.

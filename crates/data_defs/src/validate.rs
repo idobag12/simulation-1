@@ -255,20 +255,10 @@ pub(crate) fn validate_locations(
             ));
         }
         seen_ids.push(&kind.id);
-        if !kind.is_home && kind.count == 0 {
-            return Err(verr(
-                data_root,
-                file,
-                format!("public kind `{}` has count 0 (dead data)", kind.id),
-            ));
-        }
-        if kind.satisfies.is_empty() {
-            return Err(verr(
-                data_root,
-                file,
-                format!("kind `{}` satisfies nothing (dead data)", kind.id),
-            ));
-        }
+        // A public kind with count 0, or a kind that satisfies nothing,
+        // is dead data UNLESS a retail firm kind claims it (its instances
+        // come from firm genesis and citizens reach it through the offer)
+        // — that cross-file check lives in `validate_econ` (ADR 0007 §7).
         for satisfier in &kind.satisfies {
             if satisfier.per_tick <= 0 {
                 return Err(verr(
@@ -332,6 +322,12 @@ pub(crate) fn validate_ai(
     }
     if ai.sleep.home_bias_micro < 0 {
         return Err(e("sleep.home_bias_micro must be >= 0".into()));
+    }
+    if ai.purchase.mu_scale_micro < 0 {
+        return Err(e("purchase.mu_scale_micro must be >= 0".into()));
+    }
+    if ai.purchase.half_wealth_mills < 1 {
+        return Err(e("purchase.half_wealth_mills must be >= 1".into()));
     }
 
     let need_exists = |id: &str| people.needs.needs.iter().any(|n| n.id == id);

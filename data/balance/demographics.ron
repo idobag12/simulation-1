@@ -16,4 +16,8 @@ DemographicsConfig(
     // and curve; the band leaves 3σ headroom at 10k citizens.
     annual_death_rate_min_per_mille: 6,
     annual_death_rate_max_per_mille: 40,
+    // Genesis wealth (Phase 4, ADR 0007 §2): citizens buy food from
+    // seeded wealth until Phase 5 wages; the seeded sum is issuance.
+    wealth_min_mills: 20000,
+    wealth_max_mills: 40000,
 )

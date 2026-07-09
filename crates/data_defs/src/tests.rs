@@ -26,6 +26,8 @@ const GOOD_DEMOGRAPHICS: &str = r#"DemographicsConfig(
         household_max: 6,
         annual_death_rate_min_per_mille: 6,
         annual_death_rate_max_per_mille: 40,
+        wealth_min_mills: 10000,
+        wealth_max_mills: 20000,
     )"#;
 const GOOD_NAMES: &str = r#"NameList(names: ["A", "B"])"#;
 const GOOD_LOCATIONS: &str = r#"LocationsConfig(kinds: [
@@ -35,12 +37,31 @@ const GOOD_LOCATIONS: &str = r#"LocationsConfig(kinds: [
         LocationKindDef(id: "tavern", is_home: false, count: 2, satisfies: [
             SatisfierDef(need_id: "hunger", per_tick: 9000),
         ]),
+        LocationKindDef(id: "shop", is_home: false, count: 0, satisfies: []),
     ])"#;
+const GOOD_GOODS: &str = r#"GoodsConfig(goods: [
+        GoodDef(id: "bread", spoil_per_mille: 100),
+    ])"#;
+const GOOD_RECIPES: &str = r#"RecipesConfig(recipes: [
+        RecipeDef(id: "bake", inputs: [], output: GoodQty(good_id: "bread", quantity: 4), batch_hours: 1),
+    ])"#;
+const GOOD_FIRMS: &str = r#"FirmsConfig(kinds: [
+        FirmDef(id: "bakery", count: 1, recipe_id: "bake", initial_cash_mills: 1000,
+            initial_inventory: [GoodQty(good_id: "bread", quantity: 8)], initial_price_mills: 50,
+            retail: Some(RetailDef(location_kind_id: "shop", need_id: "hunger",
+                gain_per_unit: 100000, use_ticks: 5))),
+    ])"#;
+const GOOD_ECONOMY: &str = r#"EconomyConfig(
+        markup_per_mille: 300, overhead_mills_per_batch: 100,
+        controller_step_per_mille: 50, inventory_target_batches: 10,
+        min_price_mills: 1, max_price_mills: 5000,
+    )"#;
 const GOOD_AI: &str = r#"AiConfig(
         travel_ticks: 10, urgency_exponent: 2, time_cost_micro_per_tick: 300,
         max_perform_ticks: 200, idle_ticks: 15, plan_compile_hour: 21,
         sleep: SleepDef(base_start_hour: 22, base_end_hour: 6, max_shift_minutes: 60,
             shift_trait_id: "ambition", rest_need_id: "hunger", home_bias_micro: 100000),
+        purchase: PurchaseDef(mu_scale_micro: 250, half_wealth_mills: 20000),
         need_trait_weights: [
             NeedTraitWeight(need_id: "hunger", trait_id: "ambition", weight_per_mille: 500),
         ],
@@ -65,6 +86,10 @@ fn write_tree(overrides: &[(&str, &str)]) -> PathBuf {
         ("names/family.ron", GOOD_NAMES),
         ("locations.ron", GOOD_LOCATIONS),
         ("balance/ai.ron", GOOD_AI),
+        ("goods.ron", GOOD_GOODS),
+        ("recipes.ron", GOOD_RECIPES),
+        ("firms.ron", GOOD_FIRMS),
+        ("balance/economy.ron", GOOD_ECONOMY),
     ];
     for (rel, content) in base {
         let path = root.join(rel);
@@ -90,10 +115,110 @@ fn valid_data_loads() {
     assert_eq!(defs.people.needs.needs.len(), 1);
     assert_eq!(defs.people.mortality.per_day_chance(61), 5_000_000);
     let tables = resolve_ai(&defs);
-    assert_eq!(tables.kind_is_home, vec![true, false]);
+    assert_eq!(tables.kind_is_home, vec![true, false, false]);
     assert_eq!(tables.kind_satisfiers[1], vec![(0, 9000)]);
     assert_eq!(tables.rest_need, 0);
     assert_eq!(tables.need_trait[0], Some((0, 500)));
+    assert_eq!(tables.mu_scale_micro, 250);
+    assert_eq!(tables.half_wealth_mills, 20000);
+
+    let econ = resolve_economy(&defs);
+    assert_eq!(econ.goods, 1);
+    assert_eq!(econ.spoil_per_mille, vec![100]);
+    assert_eq!(econ.recipes.len(), 1);
+    assert_eq!(econ.recipes[0].output_good, 0);
+    assert_eq!(econ.recipes[0].output_quantity, 4);
+    let bakery = &econ.firm_kinds[0];
+    assert_eq!(bakery.initial_inventory, vec![8]);
+    assert_eq!(bakery.initial_cash.mills(), 1000);
+    // Retail resolves to (location kind 2 = shop, need 0 = hunger).
+    assert_eq!(bakery.retail, Some((2, 0, 100000, 5)));
+}
+
+/// ADR 0007 §7: seeded errors across goods/recipes/firms/economy are
+/// caught with precise messages, including every cross-file reference.
+#[test]
+fn economy_validation_catches_seeded_errors() {
+    // A recipe referencing an unknown good.
+    let root = write_tree(&[(
+        "recipes.ron",
+        r#"RecipesConfig(recipes: [
+            RecipeDef(id: "bake", inputs: [GoodQty(good_id: "unobtanium", quantity: 1)],
+                output: GoodQty(good_id: "bread", quantity: 4), batch_hours: 1),
+        ])"#,
+    )]);
+    match load(&root) {
+        Err(DataError::Validation { message, .. }) => {
+            assert!(message.contains("unknown good"), "{message}");
+        }
+        other => panic!("expected Validation error, got {other:?}"),
+    }
+
+    // A good nothing produces.
+    let root = write_tree(&[(
+        "goods.ron",
+        r#"GoodsConfig(goods: [
+            GoodDef(id: "bread", spoil_per_mille: 100),
+            GoodDef(id: "caviar", spoil_per_mille: 100),
+        ])"#,
+    )]);
+    match load(&root) {
+        Err(DataError::Validation { message, .. }) => {
+            assert!(message.contains("no firm kind produces"), "{message}");
+        }
+        other => panic!("expected Validation error, got {other:?}"),
+    }
+
+    // A retail location kind that world genesis would also instantiate.
+    let root = write_tree(&[(
+        "locations.ron",
+        r#"LocationsConfig(kinds: [
+            LocationKindDef(id: "home", is_home: true, count: 0, satisfies: [
+                SatisfierDef(need_id: "hunger", per_tick: 2000),
+            ]),
+            LocationKindDef(id: "shop", is_home: false, count: 3, satisfies: []),
+        ])"#,
+    )]);
+    match load(&root) {
+        Err(DataError::Validation { message, .. }) => {
+            assert!(message.contains("count 0"), "{message}");
+        }
+        other => panic!("expected Validation error, got {other:?}"),
+    }
+
+    // A dead location kind: count 0, no satisfiers, and no retail firm.
+    let root = write_tree(&[(
+        "locations.ron",
+        r#"LocationsConfig(kinds: [
+            LocationKindDef(id: "home", is_home: true, count: 0, satisfies: [
+                SatisfierDef(need_id: "hunger", per_tick: 2000),
+            ]),
+            LocationKindDef(id: "shop", is_home: false, count: 0, satisfies: []),
+            LocationKindDef(id: "ruin", is_home: false, count: 0, satisfies: []),
+        ])"#,
+    )]);
+    match load(&root) {
+        Err(DataError::Validation { message, .. }) => {
+            assert!(message.contains("dead data"), "{message}");
+        }
+        other => panic!("expected Validation error, got {other:?}"),
+    }
+
+    // Controller step out of range.
+    let root = write_tree(&[(
+        "balance/economy.ron",
+        r#"EconomyConfig(
+            markup_per_mille: 300, overhead_mills_per_batch: 100,
+            controller_step_per_mille: 0, inventory_target_batches: 10,
+            min_price_mills: 1, max_price_mills: 5000,
+        )"#,
+    )]);
+    match load(&root) {
+        Err(DataError::Validation { message, .. }) => {
+            assert!(message.contains("controller_step_per_mille"), "{message}");
+        }
+        other => panic!("expected Validation error, got {other:?}"),
+    }
 }
 
 /// ADR 0006 §7: seeded errors in locations.ron and ai.ron are caught
@@ -132,6 +257,7 @@ fn location_and_ai_validation_catches_seeded_errors() {
                 max_perform_ticks: 200, idle_ticks: 15, plan_compile_hour: 21,
                 sleep: SleepDef(base_start_hour: 22, base_end_hour: 6, max_shift_minutes: 60,
                     shift_trait_id: "nonexistent", rest_need_id: "hunger", home_bias_micro: 1),
+                purchase: PurchaseDef(mu_scale_micro: 250, half_wealth_mills: 20000),
                 need_trait_weights: [],
             )"#,
     )]);
@@ -164,6 +290,7 @@ fn location_and_ai_validation_catches_seeded_errors() {
                 max_perform_ticks: 200, idle_ticks: 15, plan_compile_hour: 21,
                 sleep: SleepDef(base_start_hour: 22, base_end_hour: 6, max_shift_minutes: 60,
                     shift_trait_id: "ambition", rest_need_id: "rest", home_bias_micro: 1),
+                purchase: PurchaseDef(mu_scale_micro: 250, half_wealth_mills: 20000),
                 need_trait_weights: [],
             )"#,
         ),
@@ -227,6 +354,7 @@ fn people_validation_catches_seeded_errors() {
                 age_bands: [AgeBand(min_age_years: 0, max_age_years: 90, weight_per_mille: 900)],
                 male_per_mille: 505, household_min: 1, household_max: 6,
                 annual_death_rate_min_per_mille: 6, annual_death_rate_max_per_mille: 40,
+                wealth_min_mills: 10000, wealth_max_mills: 20000,
             )"#,
     )]);
     match load(&root) {
@@ -301,6 +429,7 @@ fn calendar_age_overflow_is_rejected_at_load() {
                     age_bands: [AgeBand(min_age_years: 0, max_age_years: 4000000000, weight_per_mille: 1000)],
                     male_per_mille: 505, household_min: 1, household_max: 6,
                     annual_death_rate_min_per_mille: 6, annual_death_rate_max_per_mille: 40,
+                    wealth_min_mills: 10000, wealth_max_mills: 20000,
                 )"#,
         ),
     ]);

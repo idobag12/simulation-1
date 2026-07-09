@@ -48,17 +48,37 @@ fn certain_mortality_kills_everyone_and_dissolves_every_household() {
         0,
         "every household must dissolve when its last member dies"
     );
-    // Only location entities remain (homes + public places persist;
-    // Phase 3 gave towns real places — people die, places don't).
-    let locations = sim
-        .world()
+    // Only the town's institutions remain: locations (homes + public
+    // places persist — people die, places don't), firms (Phase 4:
+    // retail firms are also locations, so count entities, not stores),
+    // and the conservation-ledger entity.
+    let world = sim.world();
+    let mut institutions = std::collections::BTreeSet::new();
+    for (entity, _) in world
         .iter::<core_ecs::sim_interface::Location>()
         .expect("query")
-        .count();
+    {
+        institutions.insert(entity.index());
+    }
+    for (entity, _) in world.iter::<sim_economy::Firm>().expect("query") {
+        institutions.insert(entity.index());
+    }
+    for (entity, _) in world
+        .iter::<core_ecs::sim_interface::EconCounters>()
+        .expect("query")
+    {
+        institutions.insert(entity.index());
+    }
     assert_eq!(
-        sim.world().entity_count(),
-        locations,
-        "besides locations, no citizen or household entities may remain"
+        world.entity_count(),
+        institutions.len(),
+        "besides locations, firms, and the ledger, no citizen or household entities may remain"
+    );
+    // The dead take nothing with them (ADR 0007 §8a): every estate
+    // escheated to the ledger, so the wallet sum still equals issuance.
+    assert!(
+        debug_tools::audit_economy(world).expect("audit"),
+        "conservation must hold across a full die-off"
     );
 
     sim.step(&mut schedule).expect("tick 1");
@@ -321,7 +341,7 @@ fn cli_resume_without_flags_matches_uninterrupted_run() {
     std::fs::create_dir_all(&dir).expect("mkdir");
     let save = dir.join("resume.embersave");
     let save_str = save.to_str().expect("utf8");
-    let data = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/data_v4");
+    let data = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/data_v5");
 
     let arg = |v: &[&str]| -> Vec<String> {
         let mut a: Vec<String> = v.iter().map(|s| (*s).to_owned()).collect();

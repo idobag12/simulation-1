@@ -97,7 +97,8 @@ pub fn load_config(defs: &DataDefs) -> Result<LoadConfig, RunnerError> {
 /// Invariant (ADR 0005 §9): this list only ever GROWS AT THE END, and any
 /// growth bumps `persistence::FORMAT_VERSION` with a list-extension
 /// migration. History: v2 = fixture set; v3 = + people set; v4 = + world/
-/// AI set (Phase 3, ADR 0006 §8).
+/// AI set (Phase 3, ADR 0006 §8); v5 = + economy set (Phase 4,
+/// ADR 0007 §9 — components AND the two economy events).
 pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register::<fixture::FixtureWealth>()?;
     world.register::<fixture::FixtureTag>()?;
@@ -112,9 +113,18 @@ pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register::<sim_ai::CurrentAction>()?;
     world.register::<sim_ai::DailyPlan>()?;
     world.register::<sim_ai::LastDecision>()?;
+    world.register::<core_ecs::sim_interface::Wallet>()?;
+    world.register::<core_ecs::sim_interface::Inventory>()?;
+    world.register::<core_ecs::sim_interface::RetailOffer>()?;
+    world.register::<sim_economy::Firm>()?;
+    world.register::<core_ecs::sim_interface::FirmBooks>()?;
+    world.register::<core_ecs::sim_interface::EconCounters>()?;
+    world.register::<sim_economy::Production>()?;
     world.register_event::<fixture::FixtureChurn>()?;
     world.register_event::<fixture::FixtureAlarm>()?;
     world.register_event::<sim_people::PersonDied>()?;
+    world.register_event::<core_ecs::sim_interface::GoodsPurchased>()?;
+    world.register_event::<core_ecs::sim_interface::PriceChanged>()?;
     Ok(())
 }
 
@@ -144,8 +154,11 @@ pub fn derive_spec_from_world(world: &World) -> Result<WorldSpec, EcsError> {
 /// - Tick: fixture alarm chain, fixture walk (fixture worlds only);
 ///   then ai.decide, ai.act (towns only — decisions land before actions
 ///   advance, so a fresh decision starts moving the same tick).
-/// - Hour: ai.plan (compile hour only), then needs decay (towns only).
-/// - Day: mortality (towns only).
+/// - Hour: econ.production (batches settle before the day's deciding),
+///   then ai.plan (compile hour only), then needs decay (towns only).
+/// - Day (ADR 0007 §5): debug.audit FIRST (validates yesterday before
+///   today moves anything), then econ.trade, econ.pricing,
+///   goods.spoilage, and mortality last (towns only).
 pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
     let mut schedule = Schedule::new();
     if spec.fixture {
@@ -154,11 +167,16 @@ pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
     }
     if spec.citizens > 0 {
         let tables = data_defs::resolve_ai(defs);
+        let econ = data_defs::resolve_economy(defs);
         schedule.add_system(
             Rate::Tick,
             Box::new(sim_ai::DecideSystem::new(tables.clone())),
         );
         schedule.add_system(Rate::Tick, Box::new(sim_ai::ActSystem::new(tables.clone())));
+        schedule.add_system(
+            Rate::Hour,
+            Box::new(sim_economy::ProductionSystem::new(econ.clone())),
+        );
         schedule.add_system(Rate::Hour, Box::new(sim_ai::PlanSystem::new(tables)));
         let decays = defs
             .people
@@ -170,6 +188,19 @@ pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
         schedule.add_system(
             Rate::Hour,
             Box::new(sim_people::NeedsDecaySystem::new(decays)),
+        );
+        schedule.add_system(Rate::Day, Box::new(debug_tools::AuditSystem));
+        schedule.add_system(
+            Rate::Day,
+            Box::new(sim_economy::TradeSystem::new(econ.clone())),
+        );
+        schedule.add_system(
+            Rate::Day,
+            Box::new(sim_economy::PricingSystem::new(econ.clone())),
+        );
+        schedule.add_system(
+            Rate::Day,
+            Box::new(sim_goods::SpoilageSystem::new(econ.spoil_per_mille.clone())),
         );
         schedule.add_system(
             Rate::Day,
@@ -211,6 +242,10 @@ pub fn build_simulation(
             .map(|(_, household)| household.members.clone())
             .collect();
         sim_world::genesis::place_households(&mut world, &defs.locations, &households)?;
+        // Economy genesis last (ADR 0007 §2): the ledger entity, then
+        // firms (kind × instance order), then issuance recorded from
+        // EVERY wallet seeded above — the identities hold from tick 0.
+        sim_economy::genesis::populate(&mut world, &data_defs::resolve_economy(defs))?;
     }
     Ok((Simulation::new(world, calendar), build_schedule(spec, defs)))
 }

@@ -62,5 +62,98 @@ pub fn resolve_ai(defs: &DataDefs) -> sim_ai::AiTables {
             })
             .collect(),
         need_trait,
+        mu_scale_micro: defs.ai.purchase.mu_scale_micro,
+        half_wealth_mills: defs.ai.purchase.half_wealth_mills,
+    }
+}
+
+/// Resolves the loaded, validated configs into the index-based tables the
+/// economy systems and genesis run on (`sim_economy::EconTables`;
+/// ADR 0007 §7 — `sim_economy`/`sim_goods` never see other sim crates'
+/// config types).
+///
+/// Invariant: only call with a `DataDefs` produced by [`crate::load`];
+/// resolution relies on validation having checked every cross-reference.
+pub fn resolve_economy(defs: &DataDefs) -> sim_economy::EconTables {
+    let good_index = |id: &str| -> u32 {
+        defs.goods
+            .goods
+            .iter()
+            .position(|g| g.id == id)
+            .unwrap_or(0) as u32 // validation guarantees a hit
+    };
+    let need_index = |id: &str| -> u32 {
+        defs.people
+            .needs
+            .needs
+            .iter()
+            .position(|n| n.id == id)
+            .unwrap_or(0) as u32 // validation guarantees a hit
+    };
+    let location_kind_index = |id: &str| -> u32 {
+        defs.locations
+            .kinds
+            .iter()
+            .position(|k| k.id == id)
+            .unwrap_or(0) as u32 // validation guarantees a hit
+    };
+    let recipe_index = |id: &str| -> u32 {
+        defs.recipes
+            .recipes
+            .iter()
+            .position(|r| r.id == id)
+            .unwrap_or(0) as u32 // validation guarantees a hit
+    };
+
+    let goods = defs.goods.goods.len();
+    sim_economy::EconTables {
+        goods,
+        spoil_per_mille: defs.goods.goods.iter().map(|g| g.spoil_per_mille).collect(),
+        recipes: defs
+            .recipes
+            .recipes
+            .iter()
+            .map(|recipe| sim_economy::config::RecipeTable {
+                inputs: recipe
+                    .inputs
+                    .iter()
+                    .map(|input| (good_index(&input.good_id), input.quantity))
+                    .collect(),
+                output_good: good_index(&recipe.output.good_id),
+                output_quantity: recipe.output.quantity,
+                batch_hours: recipe.batch_hours,
+            })
+            .collect(),
+        firm_kinds: defs
+            .firms
+            .kinds
+            .iter()
+            .map(|firm| {
+                let mut initial_inventory = vec![0i64; goods];
+                for entry in &firm.initial_inventory {
+                    if let Some(slot) =
+                        initial_inventory.get_mut(good_index(&entry.good_id) as usize)
+                    {
+                        *slot += entry.quantity;
+                    }
+                }
+                sim_economy::config::FirmKindTable {
+                    count: firm.count,
+                    recipe: recipe_index(&firm.recipe_id),
+                    initial_cash: core_types::Money::from_mills(firm.initial_cash_mills),
+                    initial_inventory,
+                    initial_price: core_types::Money::from_mills(firm.initial_price_mills),
+                    retail: firm.retail.as_ref().map(|retail| {
+                        (
+                            location_kind_index(&retail.location_kind_id),
+                            need_index(&retail.need_id),
+                            retail.gain_per_unit,
+                            retail.use_ticks,
+                        )
+                    }),
+                }
+            })
+            .collect(),
+        economy: defs.economy,
     }
 }

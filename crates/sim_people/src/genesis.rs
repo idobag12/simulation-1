@@ -128,6 +128,16 @@ fn spawn_citizen(
         ) as i64));
     }
 
+    // Seeded wealth: uniform mills in the data range (Phase 4,
+    // ADR 0007 §2). Drawn last so the per-citizen draw order reads in
+    // component order; recorded as issuance by economy genesis.
+    let wealth_draw = world.rng(GENESIS_STREAM).next_u64();
+    let cash = core_types::Money::from_mills(in_range(
+        wealth_draw,
+        config.demographics.wealth_min_mills as u64,
+        config.demographics.wealth_max_mills as u64,
+    ) as i64);
+
     let citizen = world.spawn();
     world.insert(
         citizen,
@@ -140,6 +150,7 @@ fn spawn_citizen(
     )?;
     world.insert(citizen, Needs { levels })?;
     world.insert(citizen, Personality { weights })?;
+    world.insert(citizen, core_ecs::sim_interface::Wallet { cash })?;
     Ok(citizen)
 }
 

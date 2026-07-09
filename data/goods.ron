@@ -1,0 +1,12 @@
+// Goods (ADR 0007 §1). Order here IS the stable integer good id
+// (SPEC §8): inventories, counters, and recipes index this list.
+// spoil_per_mille: daily stock loss, floor(qty × per_mille / 1000) —
+// the explicit sink (SPEC §12).
+GoodsConfig(goods: [
+    GoodDef(id: "grain",    spoil_per_mille: 20),
+    GoodDef(id: "flour",    spoil_per_mille: 10),
+    GoodDef(id: "water",    spoil_per_mille: 0),
+    GoodDef(id: "bread",    spoil_per_mille: 150),
+    GoodDef(id: "timber",   spoil_per_mille: 0),
+    GoodDef(id: "firewood", spoil_per_mille: 5),
+])
