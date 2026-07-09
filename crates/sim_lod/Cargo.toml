@@ -1,0 +1,10 @@
+# Layer: sim. May depend on: core_* + external crates only; never another sim_* crate (SPEC §4).
+# Empty shell until Phase 8; dependencies are added in the phase that builds
+# it (ADR 0001). New external dependencies require an ADR (SPEC §2).
+[package]
+name = "sim_lod"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]

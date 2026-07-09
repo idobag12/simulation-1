@@ -1,0 +1,10 @@
+# Layer: core. May depend on: core_types + external crates only.
+# Empty shell until Phase 1; dependencies are added in the phase that builds
+# it (ADR 0001). New external dependencies require an ADR (SPEC §2).
+[package]
+name = "core_events"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]

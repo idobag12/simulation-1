@@ -1,0 +1,5 @@
+# SPEC §3 permits unwrap()/expect() in tests (and main()/tooling); the
+# unwrap_used/expect_used lints stay hard-on for simulation code.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true

@@ -1,0 +1,49 @@
+# Embervale workspace.
+#
+# Dependency rule (SPEC §4): arrows only point downward.
+#   viewer -> headless -> { persistence, sim_* } -> core_* -> (external)
+# No `sim_` crate may depend on another `sim_` crate; sim crates talk only
+# through components/events declared in `core_ecs::sim_interface`.
+# Every crate's own Cargo.toml states which layers it may depend on.
+# Any NEW external dependency requires an ADR in docs/decisions/ (SPEC §2).
+
+[workspace]
+resolver = "3"
+members = ["crates/*", "tests"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+# External (each justified in docs/decisions/0002 §Dependencies).
+serde = { version = "1", features = ["derive"] }
+bincode = { version = "2", features = ["serde"] }
+thiserror = "2"
+rand_core = "0.9"
+rand_pcg = { version = "0.9", features = ["serde"] }
+zstd = "0.13"
+
+# Internal — core layer.
+core_types = { path = "crates/core_types" }
+core_rng = { path = "crates/core_rng" }
+core_ecs = { path = "crates/core_ecs" }
+core_events = { path = "crates/core_events" }
+
+# Internal — simulation layer.
+sim_time = { path = "crates/sim_time" }
+sim_people = { path = "crates/sim_people" }
+sim_ai = { path = "crates/sim_ai" }
+sim_economy = { path = "crates/sim_economy" }
+sim_goods = { path = "crates/sim_goods" }
+sim_world = { path = "crates/sim_world" }
+sim_lod = { path = "crates/sim_lod" }
+
+# Internal — service layer.
+persistence = { path = "crates/persistence" }
+data_defs = { path = "crates/data_defs" }
+debug_tools = { path = "crates/debug_tools" }
+
+# Internal — front layer.
+headless = { path = "crates/headless" }
