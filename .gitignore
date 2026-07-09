@@ -1,2 +1,5 @@
 /target
 **/*.embersave
+# Committed golden fixtures are exempt: they enforce "old saves must load
+# forever" (SPEC §9) and must never be regenerated without a migration.
+!tests/fixtures/*.embersave

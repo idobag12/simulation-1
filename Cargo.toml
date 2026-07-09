@@ -1,9 +1,17 @@
 # Embervale workspace.
 #
-# Dependency rule (SPEC §4): arrows only point downward.
-#   viewer -> headless -> { persistence, sim_* } -> core_* -> (external)
-# No `sim_` crate may depend on another `sim_` crate; sim crates talk only
-# through components/events declared in `core_ecs::sim_interface`.
+# Dependency rule (SPEC §4): arrows only point downward through the layers.
+#   front   (viewer -> headless)
+#     -> service (persistence, data_defs, debug_tools)
+#       -> sim   (sim_time, sim_people, sim_ai, sim_economy, sim_goods,
+#                 sim_world, sim_lod)
+#         -> core (core_types, core_rng, core_ecs, core_events)
+#           -> external
+# A crate may depend on crates in its own column's list further down, and on
+# lower layers; service crates may depend on sim crates (e.g. persistence ->
+# sim_time). No `sim_` crate may EVER depend on another `sim_` crate; sim
+# crates talk only through components/events declared in
+# `core_ecs::sim_interface`.
 # Every crate's own Cargo.toml states which layers it may depend on.
 # Any NEW external dependency requires an ADR in docs/decisions/ (SPEC §2).
 

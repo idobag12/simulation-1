@@ -180,23 +180,37 @@ mod tests {
         );
     }
 
-    /// Golden values freeze the derivation algorithm (ADR 0002 §3). If this
-    /// fails, every save containing RNG state is invalidated.
+    /// Literal golden vectors freeze the derivation algorithm (ADR 0002 §3).
+    /// The expected bytes were computed by an independent implementation
+    /// (not this crate's code), so any edit to the splitmix64 constants,
+    /// shift amounts, or derivation steps fails here. If this test fails,
+    /// every save containing RNG state is invalidated: revert the change or
+    /// bump the save format with a migration.
     #[test]
     fn derive_stream_seed_is_frozen() {
-        let a = derive_stream_seed(Seed::new(0), "weather");
-        let b = derive_stream_seed(Seed::new(0), "weather");
-        assert_eq!(a, b);
-        assert_ne!(derive_stream_seed(Seed::new(0), "x"), a);
-        // Golden bytes recorded at Phase 0 (see phase_0 report); recomputed
-        // here from the frozen definition to detect accidental edits.
-        let mut mix_state = 0u64;
-        let mixed = splitmix64(&mut mix_state);
-        let mut state = mixed ^ fnv1a64(b"weather");
-        let mut expect = [0u8; 32];
-        for chunk in expect.chunks_exact_mut(8) {
-            chunk.copy_from_slice(&splitmix64(&mut state).to_le_bytes());
-        }
-        assert_eq!(a, expect);
+        // splitmix64 reference vector: first output for initial state 0
+        // (matches Vigna's reference implementation).
+        let mut state = 0u64;
+        assert_eq!(splitmix64(&mut state), 0xe220_a839_7b1d_cdaf);
+
+        const GOLDEN_SEED0_WEATHER: [u8; 32] = [
+            0x49, 0x3a, 0x6a, 0xcc, 0x14, 0x32, 0x84, 0xf3, 0x40, 0xd5, 0x3c, 0x72, 0x74, 0xa9,
+            0x09, 0xdb, 0x2a, 0x64, 0x25, 0x0f, 0xf1, 0x76, 0xf6, 0x13, 0x3c, 0x62, 0xf3, 0xb5,
+            0xdb, 0x52, 0x7c, 0x70,
+        ];
+        const GOLDEN_SEED42_FIXTURE_WALK: [u8; 32] = [
+            0xc3, 0x4a, 0x4a, 0x1a, 0x05, 0xce, 0x98, 0x7d, 0xa2, 0x73, 0xfc, 0xf4, 0x93, 0x00,
+            0xd0, 0x11, 0xff, 0x8e, 0xd7, 0xf5, 0xf5, 0x64, 0x8e, 0x27, 0xe0, 0x7f, 0xb9, 0x0e,
+            0x35, 0x12, 0x68, 0xcb,
+        ];
+        assert_eq!(
+            derive_stream_seed(Seed::new(0), "weather"),
+            GOLDEN_SEED0_WEATHER
+        );
+        assert_eq!(
+            derive_stream_seed(Seed::new(42), "fixture.walk"),
+            GOLDEN_SEED42_FIXTURE_WALK
+        );
+        assert_ne!(derive_stream_seed(Seed::new(0), "x"), GOLDEN_SEED0_WEATHER);
     }
 }

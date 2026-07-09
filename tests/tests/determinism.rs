@@ -2,8 +2,8 @@
 //!
 //! (a) Same seed, two fresh runs, hash-compare every checkpoint.
 //! (b) Save at tick T, load, run to T+N, compare with the uninterrupted run.
-//! (c) Replay from input log — deferred until player inputs exist (Phase 3+);
-//!     with no external inputs, a replay is exactly case (a).
+//! (c) Replay from input log — deferred by ADR 0003 until the first
+//!     external-input path exists; with no inputs, a replay is exactly (a).
 
 use core_types::Seed;
 use headless::runner::{self, WorldSpec};

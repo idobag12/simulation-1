@@ -51,9 +51,19 @@ pub enum PersistError {
     /// build, or an unknown value).
     #[error("unsupported save format version {0} (current {FORMAT_VERSION})")]
     UnsupportedVersion(u32),
-    /// Compression or decompression failed.
+    /// Compression or decompression of the payload failed (corrupt or
+    /// truncated compressed data). Distinct from [`PersistError::Io`]:
+    /// matching this variant means the *bytes* are bad, not the filesystem.
     #[error("zstd: {0}")]
-    Zstd(#[from] std::io::Error),
+    Zstd(std::io::Error),
+    /// Reading or writing the save file failed (missing file, permissions).
+    #[error("io on `{path}`: {source}")]
+    Io {
+        /// The file that could not be read or written.
+        path: std::path::PathBuf,
+        /// The underlying filesystem error.
+        source: std::io::Error,
+    },
     /// Canonical encoding/decoding failed.
     #[error(transparent)]
     Codec(#[from] CodecError),
@@ -84,7 +94,8 @@ pub fn save_to_bytes(sim: &Simulation) -> Result<Vec<u8>, PersistError> {
         components: sim.world().component_blobs()?,
     };
     let raw = codec::to_bytes(&body)?;
-    let compressed = zstd::stream::encode_all(raw.as_slice(), ZSTD_LEVEL)?;
+    let compressed =
+        zstd::stream::encode_all(raw.as_slice(), ZSTD_LEVEL).map_err(PersistError::Zstd)?;
 
     let mut out = Vec::with_capacity(MAGIC.len() + 4 + compressed.len());
     out.extend_from_slice(MAGIC);
@@ -115,7 +126,7 @@ pub fn load_from_bytes(
     version_arr.copy_from_slice(version_bytes);
     let version = u32::from_le_bytes(version_arr);
 
-    let raw = zstd::stream::decode_all(payload)?;
+    let raw = zstd::stream::decode_all(payload).map_err(PersistError::Zstd)?;
     let current = migrations::migrate_to_current(version, raw)?;
     let body: SaveBody = codec::from_bytes(&current)?;
 
@@ -130,7 +141,10 @@ pub fn load_from_bytes(
 /// Saves to a file. Tooling convenience over [`save_to_bytes`].
 pub fn save_to_file(sim: &Simulation, path: &std::path::Path) -> Result<(), PersistError> {
     let bytes = save_to_bytes(sim)?;
-    std::fs::write(path, bytes)?;
+    std::fs::write(path, bytes).map_err(|source| PersistError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
     Ok(())
 }
 
@@ -139,7 +153,10 @@ pub fn load_from_file(
     path: &std::path::Path,
     register: impl FnOnce(&mut World) -> Result<(), EcsError>,
 ) -> Result<Simulation, PersistError> {
-    let bytes = std::fs::read(path)?;
+    let bytes = std::fs::read(path).map_err(|source| PersistError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
     load_from_bytes(&bytes, register)
 }
 
@@ -197,6 +214,27 @@ mod tests {
         assert!(matches!(
             load_from_bytes(&bytes, register),
             Err(PersistError::BadMagic)
+        ));
+    }
+
+    #[test]
+    fn missing_file_is_io_not_zstd() {
+        let result = load_from_file(
+            std::path::Path::new("/nonexistent/dir/embervale.sav"),
+            register,
+        );
+        assert!(matches!(result, Err(PersistError::Io { .. })));
+    }
+
+    #[test]
+    fn corrupt_payload_is_zstd_not_io() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+        bytes.extend_from_slice(b"this is not a zstd frame");
+        assert!(matches!(
+            load_from_bytes(&bytes, register),
+            Err(PersistError::Zstd(_))
         ));
     }
 

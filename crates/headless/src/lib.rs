@@ -6,5 +6,6 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod cli;
 pub mod fixture;
 pub mod runner;
