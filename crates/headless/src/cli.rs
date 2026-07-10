@@ -30,6 +30,7 @@ pub const USAGE: &str = "usage:
   embervale inspect --load PATH --entity INDEX [--data DIR]
   embervale demography --load PATH [--data DIR]
   embervale economy --load PATH [--data DIR]
+  embervale stories --load PATH [--entity INDEX] [--data DIR]
 
 defaults: --hash-interval 10000, --entities 200, --citizens 0,
           --resume-at ticks/2, --data ./data
@@ -67,6 +68,7 @@ pub fn dispatch(args: &[String]) -> Result<bool, String> {
         "inspect" => cmd_inspect(&flags),
         "demography" => cmd_demography(&flags),
         "economy" => cmd_economy(&flags),
+        "stories" => cmd_stories(&flags),
         other => Err(format!("unknown subcommand `{other}`")),
     }
 }
@@ -359,6 +361,19 @@ fn cmd_demography(flags: &Flags) -> Result<bool, String> {
     let defs = flags.defs()?;
     let sim = load_sim(flags, &defs)?;
     print!("{}", inspect::demography(&sim, &defs)?);
+    Ok(true)
+}
+
+fn cmd_stories(flags: &Flags) -> Result<bool, String> {
+    let defs = data_defs::load(&flags.data).map_err(|e| e.to_string())?;
+    let sim = load_sim(flags, &defs)?;
+    let lines = debug_tools::stories(sim.world(), flags.entity).map_err(|e| e.to_string())?;
+    if lines.is_empty() {
+        println!("no stories in the retained window");
+    }
+    for line in lines {
+        println!("{line}");
+    }
     Ok(true)
 }
 

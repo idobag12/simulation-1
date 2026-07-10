@@ -272,6 +272,27 @@ fn settle_death(w: &mut World, entity: Entity, household: Option<Entity>) -> Res
             w.despawn(household)?;
         }
     }
+    // Widowhood is real (ADR 0010 §4): the survivor's SPOUSE edge to
+    // the deceased is removed (they may love and marry again); kin
+    // edges remain — the dead stay family.
+    if let Some(relationships) = w
+        .get::<core_ecs::sim_interface::Relationships>(entity)?
+        .cloned()
+    {
+        for edge in &relationships.edges {
+            if matches!(edge.kind, core_ecs::sim_interface::RelKind::Spouse)
+                && w.is_alive(edge.other)
+                && let Some(other_rel) =
+                    w.get_mut::<core_ecs::sim_interface::Relationships>(edge.other)?
+            {
+                other_rel.edges.retain(|e| {
+                    !(e.other == entity
+                        && matches!(e.kind, core_ecs::sim_interface::RelKind::Spouse))
+                });
+            }
+        }
+    }
+
     // Debts settle BEFORE the estate distributes (ADR 0009 §3): each of
     // the deceased's loans is repaid from wallet cash, then from the
     // deposit row (already vault-side — an internal netting); a residual
@@ -490,6 +511,9 @@ mod tests {
         world.register::<Household>().expect("register");
         world
             .register_event::<core_ecs::sim_interface::LoanDefaulted>()
+            .expect("register");
+        world
+            .register::<core_ecs::sim_interface::Relationships>()
             .expect("register");
 
         let bank = world.spawn();

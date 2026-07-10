@@ -124,6 +124,45 @@ fn citizen_report(
             status.uncreditworthy_until_day
         ));
     }
+    // Phase 7 social state (SPEC §13): skills, bonds, beliefs.
+    if let Some(skills) = world
+        .get::<core_ecs::sim_interface::Skills>(entity)
+        .map_err(err)?
+        && skills.levels.iter().any(|level| *level > 0)
+    {
+        out.push_str("skills (per-mille):\n");
+        for (def, level) in defs.skills.skills.iter().zip(&skills.levels) {
+            out.push_str(&format!("  {:<10} {level}\n", def.id));
+        }
+    }
+    if let Some(relationships) = world
+        .get::<core_ecs::sim_interface::Relationships>(entity)
+        .map_err(err)?
+    {
+        for edge in &relationships.edges {
+            let name = world
+                .get::<sim_people::Identity>(edge.other)
+                .map_err(err)?
+                .map(|identity| format!("{} {}", identity.given_name, identity.family_name))
+                .unwrap_or_else(|| format!("#{}", edge.other.index()));
+            out.push_str(&format!(
+                "bond: {:?} {} ({} per-mille)\n",
+                edge.kind, name, edge.strength_per_mille
+            ));
+        }
+    }
+    if let Some(beliefs) = world
+        .get::<core_ecs::sim_interface::Beliefs>(entity)
+        .map_err(err)?
+    {
+        for (shop, price) in &beliefs.prices {
+            out.push_str(&format!(
+                "believes: {} charges {}\n",
+                location_label(world, defs, *shop)?,
+                price
+            ));
+        }
+    }
     if let Some(employment) = world
         .get::<core_ecs::sim_interface::Employment>(entity)
         .map_err(err)?

@@ -31,12 +31,14 @@ sources, both data-defined:
   recipe skill (`recipe.skill_id`) by a data gain — slower than school.
 
 Skills bite in the labor market (SPEC §12 "vacancies (wage, skill
-req)" scaled to Phase 7's honest core): a firm's bid for a worker is
-multiplied by `(1000 + skill_weight_per_mille × level/1000)/1000` of
-its recipe's skill — skilled workers command measurably higher wages,
-which IS the mobility the exit criterion measures. Public slots use
-the school's taught skill. No hard skill gates (a town this small
-cannot afford them; documented deferral).
+req)" scaled to Phase 7's honest core) through the RESERVATION side
+(**amended:** a uniform double-auction bid cannot know its match; the
+ask knows its owner): a worker's reservation wage gains `base ×
+weight/1000 × skill/1000` of their best skill — mastery is an outside
+option, and skilled workers clear at measurably higher midpoints.
+Working a paid day raises the employer's recipe skill; public slots
+teach the public skill. No hard skill gates (a town this small cannot
+afford them; documented deferral).
 
 ## 2. Relationships
 
@@ -50,13 +52,17 @@ Friend, Romance }` — professional/rivalry edges are later texture
   birth, spouse edges at marriage, sibling edges between a newborn and
   existing children. This is the kinship network the exit criterion
   counts.
-- **Friendship/romance drift by co-presence**: a day-rate system scans
-  each location's present citizens (entity order); pairs sharing a
-  leisure location gain data drift on a Friend edge (Romance instead
-  when both are single adults and a data compatibility screen passes —
-  trait distance, opposite... no: data-defined sociability product
-  only; anything richer is Phase 8+ texture). All edges except kin
-  decay per-day by data amounts; edges at zero drop.
+- **Friendship/romance drift by co-presence**: an hour-rate system
+  scans each leisure venue's present citizens (entity order); each
+  meets the next present citizen, and single working-age adults
+  ADDITIONALLY meet the next single (**amended:** without the singles
+  pass, the last singles sit between married neighbors and never pair
+  — the generations stop). Pairs gain data drift on a Friend edge —
+  Romance instead when both are single adults, NOT kin (**amended:**
+  siblings do not court), and the data sociability-product screen
+  passes. All edges except kin/spouse decay per-day; zero edges drop.
+  Death removes the survivor's SPOUSE edge (**amended:** widows may
+  love again; kin edges remain — the dead stay family).
 - Bonds feed utility: satisfying the `social` need at a location gains
   a multiplier per present friend (data weight × strength) — visiting
   friends genuinely satisfies more (SPEC §11).
@@ -86,9 +92,15 @@ being wrong is honest and self-healing).
   the edge (no separate goal object — YAGNI).
 - **Marriage** (day-rate, deterministic): a Romance edge crossing the
   data threshold with BOTH parties single adults marries them: spouse
-  edges, `Married` event, household merge (the smaller-index household
-  absorbs; the vacated home — owned or rented — releases to the
-  housing market: marriage is a supply event, exactly like death).
+  edges, `Married` event, and a NEW household of exactly the couple
+  (**amended in-phase:** the originally designed merge COMPOUNDED —
+  every wedding unioned two extended families into one ever-growing
+  register that busted the fertility cap and sterilized the town; a
+  family is a couple and its children). The birth families keep their
+  registers; a partner's own home houses the couple, a homeless pair
+  of nest-leavers starts under the in-laws' roof (their own register,
+  the multi-generation HOME), and the vacated tenancy releases to the
+  market.
 - **Reproduction** (day-rate): married couples sharing a residence
   face a data fertility-per-day chance (age-banded, from
   `data/balance/fertility.ron`, drawn on the `people.fertility`
@@ -105,9 +117,10 @@ being wrong is honest and self-healing).
 `debug_tools::narrative` (SPEC §7, §13): a pure function over the
 event log ring — no new state, stories are OBSERVED. It groups
 high-signal events by subject entity and composes chains into
-human-readable lines when data-defined patterns match (job loss →
-eviction; courtship → marriage → birth; default → foreclosure →
-rental). Surfaced by a new CLI command `embervale stories --load PATH
+human-readable lines when its patterns match (marriage → birth; job
+loss → new work; default → renting again). **Amended:** patterns are
+CODE, not data — they are presentation logic, and SPEC §8's grep test
+targets tunables, not prose. Surfaced by a new CLI command `embervale stories --load PATH
 [--entity N]`. The ring's capacity bounds the window — stories are
 recent history, which is honest for a debugger (the exit criterion
 demands coherent lines from real chains, not an infinite archive).
@@ -115,7 +128,8 @@ demands coherent lines from real chains, not an infinite archive).
 ## 6. Save format v8
 
 Components (append): `people.skills, social.relationships,
-social.beliefs`. Events: `social.married, people.born,
+social.beliefs, people.school_age` (the birthday pass maintains the
+school window like the working-age marker). Events: `social.married, people.born,
 people.school_attended` (the skill-mobility measurement hooks).
 FORMAT_VERSION 8, mechanical v7→v8 chained from v1, continuity proofs,
 goldens re-recorded with reasons, new v8 fixture, pinned snapshot

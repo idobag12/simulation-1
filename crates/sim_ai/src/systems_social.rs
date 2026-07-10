@@ -73,7 +73,11 @@ impl System for SocialDriftSystem {
             return Ok(());
         }
         // Present citizens per venue, entity order (Needs = the citizen
-        // signal; Position = presence).
+        // signal; Position = presence). Everyone meets their neighbor;
+        // single working-age adults ADDITIONALLY meet the next single —
+        // partner-seekers find each other even when married neighbors
+        // sit between them (without this, the town's last singles never
+        // pair and the generations stop).
         let mut meetings: Vec<(Entity, Entity)> = Vec::new();
         for venue_index in venues {
             let mut present: Vec<Entity> = Vec::new();
@@ -85,11 +89,30 @@ impl System for SocialDriftSystem {
             for pair in present.windows(2) {
                 meetings.push((pair[0], pair[1]));
             }
+            let mut singles: Vec<Entity> = Vec::new();
+            for citizen in &present {
+                if is_single(world, *citizen)? && world.get::<WorkingAge>(*citizen)?.is_some() {
+                    singles.push(*citizen);
+                }
+            }
+            for pair in singles.windows(2) {
+                if pair[1].index() != pair[0].index() + 1 {
+                    // Only the pairs the general pass did not already meet.
+                    meetings.push((pair[0], pair[1]));
+                }
+            }
         }
 
         for (a, b) in meetings {
             // Romance or friendship?
-            let spark = is_single(world, a)?
+            let are_kin = world.get::<Relationships>(a)?.is_some_and(|relationships| {
+                relationships
+                    .edges
+                    .iter()
+                    .any(|edge| edge.other == b && matches!(edge.kind, RelKind::Kin))
+            });
+            let spark = !are_kin
+                && is_single(world, a)?
                 && is_single(world, b)?
                 && world.get::<WorkingAge>(a)?.is_some()
                 && world.get::<WorkingAge>(b)?.is_some()

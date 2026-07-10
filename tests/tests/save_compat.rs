@@ -191,7 +191,7 @@ const V4_GOLDEN_HASH_AT_LOAD: u64 = 0x00c9_79e4_3edf_9a3d;
 /// actions complete, new decisions land, needs decay and satisfy — under
 /// the v5 data snapshot, whose satisfiers changed; a migrated pre-economy
 /// town has no wallets or shops, so nobody buys anything, honestly).
-const V4_GOLDEN_HASH_AFTER_700: u64 = 0x9126_b7ad_c823_b3df;
+const V4_GOLDEN_HASH_AFTER_700: u64 = 0x18fa_6870_c03c_b8d0;
 
 #[test]
 fn v4_golden_save_loads_to_the_exact_golden_state() {
@@ -250,7 +250,7 @@ const V5_GOLDEN_HASH_AT_LOAD: u64 = 0x6e5c_4473_30d2_d264;
 
 /// Golden hash after resuming the v5 fixture 700 ticks (purchases,
 /// trades, repricing, and the daily audit all run again).
-const V5_GOLDEN_HASH_AFTER_700: u64 = 0x38a5_101f_266b_0d04;
+const V5_GOLDEN_HASH_AFTER_700: u64 = 0xc46c_ce3d_5108_8aaf;
 
 #[test]
 fn v5_golden_save_loads_to_the_exact_golden_state() {
@@ -384,7 +384,7 @@ const V6_GOLDEN_HASH_AT_LOAD: u64 = 0xef85_afde_9e1e_f155;
 /// the shift, then the 2,880 day boundary's audit/payroll/clearing —
 /// under the Phase 6 day schedule the money systems also run; a
 /// migrated town has no bank or treasury, so they no-op, honestly).
-const V6_GOLDEN_HASH_AFTER_1000: u64 = 0x3769_290b_30a6_88c1;
+const V6_GOLDEN_HASH_AFTER_1000: u64 = 0xf3a8_1b19_8ed7_bba6;
 
 #[test]
 fn v6_golden_save_loads_to_the_exact_golden_state() {
@@ -467,7 +467,7 @@ const V7_GOLDEN_HASH_AT_LOAD: u64 = 0x0f9b_7ae7_60b0_419d;
 /// Golden hash after resuming the v7 fixture 1,000 ticks (the rest of
 /// the shift, then the day boundary's audit, bank service/origination,
 /// payroll withholding, clearings, and markets).
-const V7_GOLDEN_HASH_AFTER_1000: u64 = 0x29f5_2e8d_43f2_7834;
+const V7_GOLDEN_HASH_AFTER_1000: u64 = 0x96f2_37a1_8b21_f2ba;
 
 #[test]
 fn v7_golden_save_loads_to_the_exact_golden_state() {
@@ -612,12 +612,12 @@ const V8_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v8_seed43_fixture30_citizens250_tick29360.embersave");
 
 /// Golden hash of the v8 fixture at load.
-const V8_GOLDEN_HASH_AT_LOAD: u64 = 0x75e9_6817_ef65_0330;
+const V8_GOLDEN_HASH_AT_LOAD: u64 = 0xb9f3_a575_5674_74eb;
 
 /// Golden hash after resuming the v8 fixture 1,000 ticks (the social
 /// hour drifts bonds, then the day boundary's decay/marriage/fertility
 /// pass runs with everything else).
-const V8_GOLDEN_HASH_AFTER_1000: u64 = 0xa340_d2d0_f9ca_6f63;
+const V8_GOLDEN_HASH_AFTER_1000: u64 = 0x998e_78a5_2792_226e;
 
 #[test]
 fn v8_golden_save_loads_to_the_exact_golden_state() {

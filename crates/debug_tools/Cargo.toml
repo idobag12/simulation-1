@@ -10,3 +10,4 @@ publish.workspace = true
 [dependencies]
 core_types = { workspace = true }
 core_ecs = { workspace = true }
+sim_people = { workspace = true }

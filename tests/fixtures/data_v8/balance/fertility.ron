@@ -8,6 +8,6 @@ FertilityConfig(
         FertilityBand(min_age_years: 25, max_age_years: 34, per_day_chance_per_billion: 7000000),
         FertilityBand(min_age_years: 35, max_age_years: 44, per_day_chance_per_billion: 2500000),
     ],
-    max_household_size: 6,
+    max_household_size: 12,
     trait_mutation_per_mille: 120,
 )

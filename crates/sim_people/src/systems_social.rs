@@ -93,39 +93,71 @@ impl System for MarriageSystem {
                 relationships.upsert(other, RelKind::Spouse, 1000, self.edge_cap);
                 world.insert(this, relationships)?;
             }
-            // The household merge: the smaller-index household absorbs.
-            let household_a = world.get::<HouseholdMember>(a)?.map(|m| m.household);
-            let household_b = world.get::<HouseholdMember>(b)?.map(|m| m.household);
-            if let (Some(ha), Some(hb)) = (household_a, household_b)
-                && ha != hb
-            {
-                let (keep, fold) = if ha.index() < hb.index() {
-                    (ha, hb)
-                } else {
-                    (hb, ha)
-                };
-                let movers: Vec<Entity> = world
-                    .get::<Household>(fold)?
-                    .map(|household| household.members.clone())
-                    .unwrap_or_default();
-                for mover in &movers {
-                    world.insert(*mover, HouseholdMember { household: keep })?;
+            // The register: the couple founds a NEW household — their
+            // children will join it; the birth families keep their own
+            // registers (merging compounded into sterile mega-
+            // households; a family is a couple and its children).
+            // Capture the in-laws' roofs BEFORE leaving.
+            let mut fallback_home: Option<Entity> = None;
+            for partner in [a, b] {
+                if fallback_home.is_some() {
+                    break;
                 }
-                if let Some(household) = world.get_mut::<Household>(keep)? {
-                    household.members.extend(movers.iter().copied());
-                    household.members.sort_by_key(|member| member.index());
-                    household.members.dedup();
+                if let Some(old) = world.get::<HouseholdMember>(partner)?.map(|m| m.household) {
+                    let members: Vec<Entity> = world
+                        .get::<Household>(old)?
+                        .map(|h| h.members.clone())
+                        .unwrap_or_default();
+                    for member in members {
+                        if member == a || member == b {
+                            continue;
+                        }
+                        if let Some(residence) = world.get::<Residence>(member)? {
+                            fallback_home = Some(residence.home);
+                            break;
+                        }
+                    }
                 }
-                world.despawn(fold)?;
             }
-            // The roof: everyone moves in with the KEPT home — the
-            // lower-index partner's residence wins; the other side's
-            // tenancy releases and their owned home goes vacant (the
-            // markets pick both up on their own).
+            for partner in [a, b] {
+                if let Some(old) = world.get::<HouseholdMember>(partner)?.map(|m| m.household) {
+                    let now_empty = {
+                        if let Some(household) = world.get_mut::<Household>(old)? {
+                            household.members.retain(|member| *member != partner);
+                            household.members.is_empty()
+                        } else {
+                            false
+                        }
+                    };
+                    if now_empty {
+                        world.despawn(old)?;
+                    }
+                }
+            }
+            let new_household = world.spawn();
+            let mut members = vec![a, b];
+            members.sort_by_key(|member| member.index());
+            world.insert(new_household, Household { members })?;
+            world.insert(
+                a,
+                HouseholdMember {
+                    household: new_household,
+                },
+            )?;
+            world.insert(
+                b,
+                HouseholdMember {
+                    household: new_household,
+                },
+            )?;
+            // The roof: a partner's own residence wins; a homeless
+            // couple (two nest-leavers) starts under the in-laws' roof
+            // — the multi-generation HOME, with their own register.
             let kept_home = world
                 .get::<Residence>(a)?
                 .map(|residence| residence.home)
-                .or(world.get::<Residence>(b)?.map(|residence| residence.home));
+                .or(world.get::<Residence>(b)?.map(|residence| residence.home))
+                .or(fallback_home);
             if let Some(home) = kept_home {
                 for partner in [a, b] {
                     let moving = world

@@ -10,3 +10,6 @@
 mod audit;
 
 pub use audit::{AuditSystem, audit_economy};
+
+pub mod narrative;
+pub use narrative::stories;

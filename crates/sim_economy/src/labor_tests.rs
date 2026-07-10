@@ -221,6 +221,17 @@ fn reservation_wages_rise_with_wealth_and_fall_with_industriousness() {
         "the wealth raise saturates near +45, got {richest_lazy}"
     );
     let broke_industrious = market.reservation(0, 1000, 0).expect("ask");
+    // Phase 7 (ADR 0010 §1): mastery is an outside option — the skill
+    // premium raises the ask (tables carry weight 0 here, so build a
+    // market with a real weight for the comparison).
+    let mut skilled_tables = tables();
+    skilled_tables.labor_skill_weight_per_mille = 600;
+    let skilled_market = crate::LaborMarketSystem::new(skilled_tables);
+    assert!(
+        skilled_market.reservation(0, 0, 1000).expect("ask")
+            > skilled_market.reservation(0, 0, 0).expect("ask"),
+        "a master asks more than a novice"
+    );
     assert_eq!(
         broke_industrious,
         150 - 60,
