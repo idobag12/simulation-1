@@ -51,11 +51,22 @@ pub fn spoil_stock(
                 "goods destroyed in a world without an EconCounters ledger".to_owned(),
             )
         })?;
-        if let Some(counters) = world.get_mut::<EconCounters>(counters)?
-            && let Some(spoiled) = counters.spoiled.get_mut(good as usize)
-        {
-            *spoiled += destroyed;
-        }
+        // The counter update is structurally required: destruction that
+        // the ledger cannot record is a typed error, never a silent
+        // uncounted loss (the "never one without the other" invariant).
+        let spoiled = world
+            .get_mut::<EconCounters>(counters)?
+            .and_then(|counters| counters.spoiled.get_mut(good as usize))
+            .ok_or_else(|| {
+                EcsError::InvariantViolation(format!(
+                    "the conservation ledger has no spoiled slot for good {good}"
+                ))
+            })?;
+        *spoiled = spoiled.checked_add(destroyed).ok_or(EcsError::Arithmetic(
+            core_types::ArithmeticError::Overflow {
+                op: "spoiled counter add",
+            },
+        ))?;
     }
     Ok(destroyed)
 }
@@ -100,7 +111,11 @@ impl System for SpoilageSystem {
         for (entity, inventory) in world.iter::<Inventory>()? {
             for (good, stock) in inventory.quantities.iter().enumerate() {
                 let per_mille = self.spoil_per_mille.get(good).copied().unwrap_or(0);
-                let loss = stock * per_mille / 1000;
+                let loss = stock.checked_mul(per_mille).ok_or(EcsError::Arithmetic(
+                    core_types::ArithmeticError::Overflow {
+                        op: "spoilage multiply",
+                    },
+                ))? / 1000;
                 if loss > 0 {
                     losses.push((entity, good as u32, loss));
                 }

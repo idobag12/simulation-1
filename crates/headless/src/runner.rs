@@ -41,6 +41,14 @@ pub struct WorldSpec {
     pub fixture_entities: u32,
     /// Initial citizen count (0 = no town; Phase 2, ADR 0005).
     pub citizens: u32,
+    /// Whether the world carries an economy even with zero citizens
+    /// (ADR 0007 §8b). Fresh builds derive their economy from
+    /// `citizens > 0`, so constructors leave this `false`; loads set it
+    /// from the saved world's ledger, because firms keep producing,
+    /// trading, repricing, and spoiling after the last citizen dies —
+    /// a post-extinction resume must keep their systems (and the
+    /// auditor) running exactly like the uninterrupted run (SPEC §9).
+    pub economy: bool,
 }
 
 impl WorldSpec {
@@ -51,6 +59,7 @@ impl WorldSpec {
             fixture: false,
             fixture_entities: 0,
             citizens: 0,
+            economy: false,
         }
     }
 
@@ -61,6 +70,7 @@ impl WorldSpec {
             fixture: true,
             fixture_entities: entities,
             citizens: 0,
+            economy: false,
         }
     }
 
@@ -71,6 +81,7 @@ impl WorldSpec {
             fixture: false,
             fixture_entities: 0,
             citizens,
+            economy: false,
         }
     }
 }
@@ -141,11 +152,19 @@ pub fn register_world(world: &mut World) -> Result<(), EcsError> {
 pub fn derive_spec_from_world(world: &World) -> Result<WorldSpec, EcsError> {
     let citizens = world.iter::<sim_people::Identity>()?.count() as u32;
     let fixture_rows = world.iter::<fixture::FixtureWealth>()?.count() as u32;
+    // The economy outlives its citizens (ADR 0007 §8b): a world whose
+    // conservation ledger exists keeps its firm systems and auditor
+    // scheduled even after the last citizen dies.
+    let economy = world
+        .iter::<core_ecs::sim_interface::EconCounters>()?
+        .next()
+        .is_some();
     Ok(WorldSpec {
         seed: world.seed(),
         fixture: fixture_rows > 0,
         fixture_entities: fixture_rows,
         citizens,
+        economy,
     })
 }
 
@@ -159,13 +178,18 @@ pub fn derive_spec_from_world(world: &World) -> Result<WorldSpec, EcsError> {
 /// - Day (ADR 0007 §5): debug.audit FIRST (validates yesterday before
 ///   today moves anything), then econ.trade, econ.pricing,
 ///   goods.spoilage, and mortality last (towns only).
+///
+/// The town list is scheduled when the world has citizens OR an economy
+/// (ADR 0007 §8b): firms keep working after the last citizen dies, and
+/// the citizen systems no-op honestly over an empty town — so a
+/// post-extinction resume evolves exactly like the uninterrupted run.
 pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
     let mut schedule = Schedule::new();
     if spec.fixture {
         schedule.add_system(Rate::Tick, Box::new(fixture::FixtureAlarmSystem));
         schedule.add_system(Rate::Tick, Box::new(fixture::FixtureWalkSystem));
     }
-    if spec.citizens > 0 {
+    if spec.citizens > 0 || spec.economy {
         let tables = data_defs::resolve_ai(defs);
         let econ = data_defs::resolve_economy(defs);
         schedule.add_system(

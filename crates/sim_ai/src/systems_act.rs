@@ -255,34 +255,45 @@ fn execute_purchase(world: &mut World, buyer: Entity, seller: Entity) -> Result<
                 "a retail purchase ran in a world without an EconCounters ledger".to_owned(),
             )
         })?;
+    let missing = |leg: &str, entity: Entity| {
+        EcsError::InvariantViolation(format!(
+            "purchase leg missing: entity #{} has no {leg}",
+            entity.index()
+        ))
+    };
 
-    // The atomic transaction (ADR 0007 §4): money…
-    if let Some(wallet) = world.get_mut::<Wallet>(buyer)? {
-        wallet.cash = wallet.cash.try_sub(price)?;
-    }
-    if let Some(wallet) = world.get_mut::<Wallet>(seller)? {
-        wallet.cash = wallet.cash.try_add(price)?;
-    }
-    if let Some(books) = world.get_mut::<FirmBooks>(seller)? {
-        books.revenue = books.revenue.try_add(price)?;
-    }
+    // The atomic transaction (ADR 0007 §§4, 8b): every leg structurally
+    // required — a missing component is a typed error at the fault site,
+    // never a silently skipped half-transfer. Money…
+    let wallet = world
+        .get_mut::<Wallet>(buyer)?
+        .ok_or_else(|| missing("buyer wallet", buyer))?;
+    wallet.cash = wallet.cash.try_sub(price)?;
+    let wallet = world
+        .get_mut::<Wallet>(seller)?
+        .ok_or_else(|| missing("seller wallet", seller))?;
+    wallet.cash = wallet.cash.try_add(price)?;
+    let books = world
+        .get_mut::<FirmBooks>(seller)?
+        .ok_or_else(|| missing("seller books", seller))?;
+    books.revenue = books.revenue.try_add(price)?;
     // …goods (one unit off the shelf, counted as citizen consumption)…
-    if let Some(inventory) = world.get_mut::<Inventory>(seller)?
-        && let Some(stock) = inventory.quantities.get_mut(offer.good as usize)
-    {
-        *stock -= 1;
-    }
-    if let Some(counters) = world.get_mut::<EconCounters>(ledger)?
-        && let Some(consumed) = counters.consumed_by_citizens.get_mut(offer.good as usize)
-    {
-        *consumed += 1;
-    }
+    let stock = world
+        .get_mut::<Inventory>(seller)?
+        .and_then(|inventory| inventory.quantities.get_mut(offer.good as usize))
+        .ok_or_else(|| missing("shelf slot for the offered good", seller))?;
+    *stock -= 1;
+    let consumed = world
+        .get_mut::<EconCounters>(ledger)?
+        .and_then(|counters| counters.consumed_by_citizens.get_mut(offer.good as usize))
+        .ok_or_else(|| missing("counter slot for the offered good", ledger))?;
+    *consumed += 1;
     // …the satisfaction the unit buys (clamped exact gain)…
-    if let Some(needs) = world.get_mut::<Needs>(buyer)?
-        && let Some(level) = needs.levels.get_mut(offer.need_index as usize)
-    {
-        *level = level.gain(offer.gain_per_unit);
-    }
+    let level = world
+        .get_mut::<Needs>(buyer)?
+        .and_then(|needs| needs.levels.get_mut(offer.need_index as usize))
+        .ok_or_else(|| missing("need level for the offered need", buyer))?;
+    *level = level.gain(offer.gain_per_unit);
     // …and the fact.
     world.emit(&GoodsPurchased {
         buyer,

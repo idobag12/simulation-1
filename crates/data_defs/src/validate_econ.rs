@@ -121,6 +121,23 @@ fn validate_recipes(
                 format!("recipe `{}` outputs one of its own inputs", recipe.id),
             ));
         }
+        // Duplicate input goods would defeat the batch-start stock check
+        // (each entry is tested against the same stock independently) and
+        // double-spend an inventory below zero (ADR 0007 §8b).
+        let mut input_goods: Vec<&str> = Vec::new();
+        for input in &recipe.inputs {
+            if input_goods.contains(&input.good_id.as_str()) {
+                return Err(verr(
+                    data_root,
+                    file,
+                    format!(
+                        "recipe `{}` lists input good `{}` more than once",
+                        recipe.id, input.good_id
+                    ),
+                ));
+            }
+            input_goods.push(&input.good_id);
+        }
     }
     Ok(())
 }

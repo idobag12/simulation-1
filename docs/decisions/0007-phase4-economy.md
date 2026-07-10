@@ -18,9 +18,14 @@ inputs), mill grain→flour, bakery flour+water→bread, woodyard
 timber→firewood. Two retail endpoints face citizens: **bakery** sells
 bread (satisfies hunger) and **woodyard** sells firewood (satisfies
 shelter — the purchase abstracts the hearth; burning firewood over time
-is later-phase texture). The tavern/well lose their free hunger
-satisfiers (data edit): food now costs money. Social/purpose/esteem/rest
-remain non-economic this phase.
+is later-phase texture). The needs that became economic lose their free
+satisfiers (data edits): tavern/well drop hunger AND the home drops its
+free shelter satisfier — a free hearth would dominate the firewood
+market and make the woodyard dead code; shelter is satisfied by the
+purchase, per this section's design. The well keeps a small free social
+satisfier in exchange (the village well is a gathering spot), so the
+kind stays live data. Social/purpose/esteem/rest remain non-economic
+this phase.
 
 ## 2. Money: wallets, seeded wealth, issuance
 
@@ -31,6 +36,12 @@ in the `EconCounters` singleton at the moment of creation — the one
 explicitly modeled money source. Nothing else creates or destroys money;
 every later movement is a transfer. (Banking/issuance-as-actor is
 Phase 6; imports/exports join when the economy opens, also Phase 6+.)
+
+Goods seeding follows the same rule symmetrically: firm archetypes seed
+initial stock, and every seeded unit is recorded in the `produced`
+counter at creation — `produced` means "every unit that ever entered the
+world" (genesis seed + recipe output), which is what makes the §4 goods
+identity exact from tick 0 without a separate seed term.
 
 ## 3. Ledgers: Phase 4's honest double-entry slice
 
@@ -133,6 +144,34 @@ escheat wallet on the ledger entity ("unclaimed with the town" — the
 seam Phase 6's treasury absorbs). Nothing is destroyed; the auditor
 keeps passing across deaths. Worlds migrated from pre-economy saves have
 no wallets, so their deaths carry no estates — unchanged behavior.
+
+## 8b. Post-review amendments (same phase, before the fixes landed)
+
+The adversarial review confirmed four hardening decisions, recorded here
+before the code changed:
+
+- **Schedules derive from world content, not just citizens.** Firms,
+  inventories, and the ledger evolve with zero citizens, so gating the
+  economy systems on the citizen count made a post-extinction resume
+  diverge from the uninterrupted run (SPEC §9). `WorldSpec` gains an
+  `economy` flag; loads derive it from the presence of the ledger; town
+  systems are scheduled when the world has citizens OR an economy (the
+  citizen systems no-op honestly in an empty town).
+- **Wallets are audited non-negative.** The Wallet invariant ("never
+  negative in Phase 4") joins the daily audit alongside inventory
+  non-negativity — a purchase-guard regression must halt the run, not
+  slip past `Σ wallets == issued`.
+- **Transaction legs never silently no-op.** The transfer/stock/counter
+  helpers error (`InvariantViolation`) when a structurally required
+  component or slot is missing, instead of skipping the leg and leaving
+  the drift for the next day's audit to notice.
+- **The wealth seed range is validated** (`0 ≤ min ≤ max`) like every
+  sibling demographics range — an inverted or negative range is a
+  startup error, never an underflow or a negative seeded wallet.
+- **A recipe may not list the same input good twice.** The batch-start
+  check tests each entry against the same stock independently, so a
+  duplicated input could double-spend an inventory below zero; rejected
+  at load like every other malformed cross-reference.
 
 ## 9. Save format v5
 

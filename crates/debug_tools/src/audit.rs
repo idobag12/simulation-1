@@ -25,9 +25,19 @@ pub fn audit_economy(world: &World) -> Result<bool, EcsError> {
     };
     let counters = counters.clone();
 
-    // Money: every wallet in the town, citizens and firms alike.
+    // Money: every wallet in the town, citizens and firms alike. The
+    // Wallet invariant — never negative in Phase 4 — is audited here
+    // (ADR 0007 §8b): a broken spending guard must halt the run even
+    // though negative balances cancel out of the sum.
     let mut wallet_sum = Money::ZERO;
-    for (_, wallet) in world.iter::<Wallet>()? {
+    for (entity, wallet) in world.iter::<Wallet>()? {
+        if wallet.cash < Money::ZERO {
+            return Err(EcsError::InvariantViolation(format!(
+                "entity #{} holds a negative wallet ({})",
+                entity.index(),
+                wallet.cash
+            )));
+        }
         wallet_sum = wallet_sum.try_add(wallet.cash)?;
     }
     if wallet_sum != counters.issued {
@@ -63,7 +73,11 @@ pub fn audit_economy(world: &World) -> Result<bool, EcsError> {
                     entity.index()
                 )));
             }
-            *total += held;
+            *total = total.checked_add(*held).ok_or(EcsError::Arithmetic(
+                core_types::ArithmeticError::Overflow {
+                    op: "audit Σ stock",
+                },
+            ))?;
         }
     }
     for (good, total) in stock_sum.iter().enumerate() {
@@ -188,6 +202,26 @@ mod tests {
             .cash = Money::from_mills(501);
         let err = audit_economy(&world).expect_err("must drift");
         assert!(err.to_string().contains("money conservation"), "{err}");
+
+        // A negative wallet is caught even when the SUM still balances
+        // (ADR 0007 §8b): park the difference on a second entity.
+        let hoard = world.spawn();
+        world
+            .insert(
+                hoard,
+                Wallet {
+                    cash: Money::from_mills(505),
+                },
+            )
+            .expect("insert");
+        world
+            .get_mut::<Wallet>(firm)
+            .expect("get")
+            .expect("some")
+            .cash = Money::from_mills(-5);
+        let err = audit_economy(&world).expect_err("must catch the negative wallet");
+        assert!(err.to_string().contains("negative wallet"), "{err}");
+        world.despawn(hoard).expect("despawn");
         world
             .get_mut::<Wallet>(firm)
             .expect("get")

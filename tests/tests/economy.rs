@@ -225,3 +225,244 @@ fn economy_report_and_wallet_are_inspectable() {
     let dump = headless::inspect::inspect_entity(&sim, &defs, 1).expect("inspect");
     assert!(dump.contains("wallet: "), "{dump}");
 }
+
+/// ADR 0007 §6 abort semantics, directly: a `BuyPending` whose shelf
+/// emptied or whose buyer went broke between deciding and arriving
+/// aborts cleanly — nothing transferred, the action simply ends.
+#[test]
+fn purchases_abort_cleanly_when_stock_or_cash_vanished() {
+    let defs = pinned_defs();
+    let bread = defs
+        .goods
+        .goods
+        .iter()
+        .position(|g| g.id == "bread")
+        .expect("bread exists") as u32;
+
+    let find_bakery = |world: &core_ecs::World| -> core_ecs::Entity {
+        world
+            .iter::<RetailOffer>()
+            .expect("query")
+            .find(|(_, offer)| offer.good == bread)
+            .map(|(entity, _)| entity)
+            .expect("a bakery exists")
+    };
+    let first_citizens = |world: &core_ecs::World, n: usize| -> Vec<core_ecs::Entity> {
+        world
+            .iter::<sim_people::Identity>()
+            .expect("query")
+            .take(n)
+            .map(|(entity, _)| entity)
+            .collect()
+    };
+    let wallet = |world: &core_ecs::World, e: core_ecs::Entity| -> i64 {
+        world
+            .get::<Wallet>(e)
+            .expect("query")
+            .expect("wallet")
+            .cash
+            .mills()
+    };
+
+    // Case 1: the shelf emptied (through the counted sink) before the
+    // purchase executed.
+    let (mut sim, mut schedule) =
+        runner::build_simulation(&WorldSpec::town(Seed::new(86), 30), &defs).expect("build");
+    let bakery = find_bakery(sim.world());
+    let citizen = first_citizens(sim.world(), 1)[0];
+    sim_goods::spoil_stock(sim.world_mut(), bakery, bread, i64::MAX).expect("empty the shelf");
+    let world = sim.world_mut();
+    world
+        .insert(citizen, core_ecs::sim_interface::Position { at: bakery })
+        .expect("insert");
+    world
+        .insert(citizen, sim_ai::CurrentAction::BuyPending { at: bakery })
+        .expect("insert");
+    let cash_before = wallet(sim.world(), citizen);
+    sim.step(&mut schedule).expect("step");
+    assert_eq!(
+        wallet(sim.world(), citizen),
+        cash_before,
+        "an aborted purchase must not move money"
+    );
+    assert!(
+        sim.world()
+            .get::<sim_ai::CurrentAction>(citizen)
+            .expect("query")
+            .is_none(),
+        "the aborted action ends; the citizen re-decides next tick"
+    );
+    assert_eq!(
+        counters(sim.world()).consumed_by_citizens[bread as usize],
+        0,
+        "nothing was consumed"
+    );
+    assert!(debug_tools::audit_economy(sim.world()).expect("audit"));
+
+    // Case 2: the buyer's cash vanished (moved to a neighbor — a
+    // conserving intervention) before the purchase executed.
+    let (mut sim, mut schedule) =
+        runner::build_simulation(&WorldSpec::town(Seed::new(87), 30), &defs).expect("build");
+    let bakery = find_bakery(sim.world());
+    let citizens = first_citizens(sim.world(), 2);
+    let (buyer, neighbor) = (citizens[0], citizens[1]);
+    let world = sim.world_mut();
+    let estate = world
+        .get::<Wallet>(buyer)
+        .expect("query")
+        .expect("wallet")
+        .cash;
+    world
+        .get_mut::<Wallet>(buyer)
+        .expect("query")
+        .expect("wallet")
+        .cash = core_types::Money::ZERO;
+    let neighbor_wallet = world
+        .get_mut::<Wallet>(neighbor)
+        .expect("query")
+        .expect("wallet");
+    neighbor_wallet.cash = neighbor_wallet.cash.try_add(estate).expect("add");
+    world
+        .insert(buyer, core_ecs::sim_interface::Position { at: bakery })
+        .expect("insert");
+    world
+        .insert(buyer, sim_ai::CurrentAction::BuyPending { at: bakery })
+        .expect("insert");
+    let shelf_before = sim
+        .world()
+        .get::<core_ecs::sim_interface::Inventory>(bakery)
+        .expect("query")
+        .expect("inventory")
+        .stock(bread);
+    assert!(
+        shelf_before > 0,
+        "the shelf is stocked; only the cash is gone"
+    );
+    sim.step(&mut schedule).expect("step");
+    assert_eq!(wallet(sim.world(), buyer), 0, "still broke, not negative");
+    assert!(
+        sim.world()
+            .get::<sim_ai::CurrentAction>(buyer)
+            .expect("query")
+            .is_none(),
+        "the penniless purchase aborts cleanly"
+    );
+    assert_eq!(
+        counters(sim.world()).consumed_by_citizens[bread as usize],
+        0,
+        "nothing was sold"
+    );
+    assert!(debug_tools::audit_economy(sim.world()).expect("audit"));
+}
+
+/// Two buyers, one loaf, same tick: the purchase pass re-checks LIVE
+/// stock sequentially in entity order, so the shelf can never oversell —
+/// the first buyer eats, the second aborts.
+#[test]
+fn same_tick_contention_never_oversells_the_last_unit() {
+    let defs = pinned_defs();
+    let bread = defs
+        .goods
+        .goods
+        .iter()
+        .position(|g| g.id == "bread")
+        .expect("bread exists") as u32;
+    let (mut sim, mut schedule) =
+        runner::build_simulation(&WorldSpec::town(Seed::new(88), 30), &defs).expect("build");
+    let bakery = sim
+        .world()
+        .iter::<RetailOffer>()
+        .expect("query")
+        .find(|(_, offer)| offer.good == bread)
+        .map(|(entity, _)| entity)
+        .expect("a bakery exists");
+    let stock = sim
+        .world()
+        .get::<core_ecs::sim_interface::Inventory>(bakery)
+        .expect("query")
+        .expect("inventory")
+        .stock(bread);
+    sim_goods::spoil_stock(sim.world_mut(), bakery, bread, stock - 1).expect("down to one loaf");
+    let citizens: Vec<core_ecs::Entity> = sim
+        .world()
+        .iter::<sim_people::Identity>()
+        .expect("query")
+        .take(2)
+        .map(|(entity, _)| entity)
+        .collect();
+    let world = sim.world_mut();
+    for citizen in &citizens {
+        world
+            .insert(*citizen, core_ecs::sim_interface::Position { at: bakery })
+            .expect("insert");
+        world
+            .insert(*citizen, sim_ai::CurrentAction::BuyPending { at: bakery })
+            .expect("insert");
+    }
+    sim.step(&mut schedule).expect("step");
+
+    let world = sim.world();
+    let winner_action = world
+        .get::<sim_ai::CurrentAction>(citizens[0])
+        .expect("query");
+    assert!(
+        matches!(winner_action, Some(sim_ai::CurrentAction::Consume { .. })),
+        "the lower-indexed buyer got the loaf, got {winner_action:?}"
+    );
+    assert!(
+        world
+            .get::<sim_ai::CurrentAction>(citizens[1])
+            .expect("query")
+            .is_none(),
+        "the second buyer aborted cleanly"
+    );
+    assert_eq!(
+        world
+            .get::<core_ecs::sim_interface::Inventory>(bakery)
+            .expect("query")
+            .expect("inventory")
+            .stock(bread),
+        0,
+        "exactly one loaf left the shelf"
+    );
+    assert_eq!(counters(world).consumed_by_citizens[bread as usize], 1);
+    assert!(debug_tools::audit_economy(world).expect("audit"));
+}
+
+/// The halt mechanism itself, end to end (ADR 0007 §5): seeded drift in
+/// a wallet makes the SCHEDULED run error out at the next day boundary —
+/// the auditor is wired in and its violation aborts the tick.
+#[test]
+fn a_scheduled_run_halts_on_seeded_money_drift() {
+    let defs = pinned_defs();
+    let (mut sim, mut schedule) =
+        runner::build_simulation(&WorldSpec::town(Seed::new(89), 40), &defs).expect("build");
+    sim.run_ticks(&mut schedule, 2 * TICKS_PER_DAY)
+        .expect("healthy run");
+
+    // Mint one mill from nothing — precisely what the auditor exists to
+    // catch.
+    let victim = sim
+        .world()
+        .iter::<Wallet>()
+        .expect("query")
+        .next()
+        .map(|(entity, _)| entity)
+        .expect("wallets exist");
+    let wallet = sim
+        .world_mut()
+        .get_mut::<Wallet>(victim)
+        .expect("query")
+        .expect("wallet");
+    wallet.cash = wallet
+        .cash
+        .try_add(core_types::Money::from_mills(1))
+        .expect("add");
+
+    let err = sim
+        .run_ticks(&mut schedule, TICKS_PER_DAY + 10)
+        .expect_err("the next daily audit must halt the run");
+    let message = err.to_string();
+    assert!(message.contains("money conservation"), "{message}");
+    assert!(message.contains("debug.audit"), "{message}");
+}

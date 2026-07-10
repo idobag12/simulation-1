@@ -262,6 +262,25 @@ fn v5_golden_save_loads_to_the_exact_golden_state() {
         counters.consumed_by_citizens.iter().sum::<i64>() > 0,
         "citizens had bought goods when the fixture was saved"
     );
+    // The Phase 4 action variants are in flight at the save point, so the
+    // resume golden genuinely covers their (de)serialization and
+    // continuation (SPEC §9).
+    let buying = world
+        .iter::<sim_ai::CurrentAction>()
+        .expect("query")
+        .filter(|(_, action)| {
+            matches!(
+                action,
+                sim_ai::CurrentAction::BuyTravel { .. }
+                    | sim_ai::CurrentAction::BuyPending { .. }
+                    | sim_ai::CurrentAction::Consume { .. }
+            )
+        })
+        .count();
+    assert!(
+        buying > 0,
+        "the v5 fixture must have purchase actions in flight"
+    );
     assert!(
         debug_tools::audit_economy(world).expect("audit"),
         "the loaded fixture must satisfy every conservation identity"

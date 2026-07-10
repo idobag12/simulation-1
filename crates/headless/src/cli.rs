@@ -143,6 +143,9 @@ impl Flags {
             fixture: self.fixture,
             fixture_entities: self.entities,
             citizens: self.citizens,
+            // Fresh builds derive their economy from the citizen count;
+            // loads derive it from the save (ADR 0007 §8b).
+            economy: false,
         })
     }
 
@@ -303,7 +306,11 @@ fn cmd_save_load_check(flags: &Flags) -> Result<bool, String> {
     let load_config = runner::load_config(&defs).map_err(|e| e.to_string())?;
     let mut resumed = persistence::load_from_bytes(&save, load_config, runner::register_world)
         .map_err(|e| e.to_string())?;
-    let mut resumed_schedule = runner::build_schedule(&spec, &defs);
+    // Resume through the same derived-from-save path `run --load` uses,
+    // so this check exercises the real resume schedule (ADR 0007 §8b) —
+    // the two resume paths in this binary must never disagree.
+    let derived = runner::derive_spec_from_world(resumed.world()).map_err(|e| e.to_string())?;
+    let mut resumed_schedule = runner::build_schedule(&derived, &defs);
     resumed
         .run_ticks(&mut resumed_schedule, ticks - resume_at)
         .map_err(|e| e.to_string())?;
@@ -479,6 +486,8 @@ mod tests {
             dispatch(&args(&["inspect", "--load", path_str, "--entity", "1"])),
             Ok(true)
         );
+        // The Phase 4 economy report renders from a save through the CLI.
+        assert_eq!(dispatch(&args(&["economy", "--load", path_str])), Ok(true));
 
         std::fs::remove_file(&path).ok();
         std::fs::remove_file(&csv).ok();

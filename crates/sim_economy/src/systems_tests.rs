@@ -244,3 +244,48 @@ fn pricing_cuts_in_glut_raises_in_shortage_and_respects_the_floor() {
         .mills();
     assert_eq!(farm_price, 26, "the cost-plus floor holds under a glut");
 }
+
+#[test]
+fn trade_is_bounded_by_buyer_cash_and_starved_firms_idle() {
+    // A cash-poor mill (90 mills) with an empty inventory: production
+    // must idle (input starvation — no batch, nothing consumed), and the
+    // daily trade must buy only what the wallet affords.
+    let mut tables = tables();
+    tables.firm_kinds[1].initial_cash = Money::from_mills(90);
+    tables.firm_kinds[1].initial_inventory = vec![0, 0];
+    let mut world = world_with_firms(&tables);
+    let firms = firm_entities(&world);
+    let (farm, mill) = (firms[0], firms[1]);
+
+    let mut production = crate::ProductionSystem::new(tables.clone());
+    let mut cmd = CommandBuffer::new();
+    for _ in 0..7 {
+        production.run(&mut world, &ctx(), &mut cmd).expect("run");
+    }
+    // Starvation: the mill never started a batch and consumed nothing.
+    assert!(
+        world.get::<Production>(mill).expect("get").is_none(),
+        "an input-starved firm must idle, not fake a batch"
+    );
+    assert_eq!(counters(&world).consumed_in_production, vec![0, 0]);
+
+    let mut trade = crate::TradeSystem::new(tables);
+    trade.run(&mut world, &ctx(), &mut cmd).expect("run");
+
+    // Deficit is 4 × 3 = 12 grain and the farm has plenty, but at the
+    // posted 40 mills only 90 / 40 = 2 units are affordable.
+    assert_eq!(
+        world
+            .get::<Inventory>(mill)
+            .expect("get")
+            .expect("some")
+            .stock(0),
+        2,
+        "the purchase is bounded by the buyer's cash"
+    );
+    let mill_wallet = world.get::<Wallet>(mill).expect("get").expect("some");
+    assert_eq!(mill_wallet.cash, Money::from_mills(10));
+    assert!(mill_wallet.cash >= Money::ZERO, "wallets never go negative");
+    let farm_books = world.get::<FirmBooks>(farm).expect("get").expect("some");
+    assert_eq!(farm_books.revenue, Money::from_mills(80));
+}

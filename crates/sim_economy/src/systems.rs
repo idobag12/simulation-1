@@ -12,9 +12,12 @@ use core_types::{ArithmeticError, Money};
 use crate::components::{Firm, Production};
 use crate::config::EconTables;
 
-/// `ceil(a / b)` for positive operands (exact integer pricing math).
-fn div_ceil(a: i64, b: i64) -> i64 {
-    (a + b - 1) / b
+/// `ceil(a / b)` for positive operands (exact integer pricing math;
+/// checked — SPEC §2).
+fn div_ceil(a: i64, b: i64, op: &'static str) -> Result<i64, EcsError> {
+    Ok(a.checked_add(b - 1)
+        .ok_or(EcsError::Arithmetic(ArithmeticError::Overflow { op }))?
+        / b)
 }
 
 /// `a × b` with the overflow surfaced as a typed error (SPEC §2: checked
@@ -24,44 +27,75 @@ fn mul(a: i64, b: i64, op: &'static str) -> Result<i64, EcsError> {
         .ok_or(EcsError::Arithmetic(ArithmeticError::Overflow { op }))
 }
 
+/// `a + b`, checked (SPEC §2 — the sums of checked products must not
+/// silently wrap either).
+fn add(a: i64, b: i64, op: &'static str) -> Result<i64, EcsError> {
+    a.checked_add(b)
+        .ok_or(EcsError::Arithmetic(ArithmeticError::Overflow { op }))
+}
+
+/// A missing structurally-required transaction leg (ADR 0007 §8b): the
+/// error names the leg so a half-executed transfer can never be deferred
+/// to an unattributed audit halt a day later.
+fn missing(leg: &str, entity: Entity) -> EcsError {
+    EcsError::InvariantViolation(format!(
+        "transaction leg missing: entity #{} has no {leg}",
+        entity.index()
+    ))
+}
+
 /// Moves `total` from `buyer`'s wallet to `seller`'s and books it on both
-/// firms' ledgers (buyer expense, seller revenue) — the money half of
-/// every purchase, firm-to-firm and retail alike. The caller has already
-/// verified the buyer can pay.
+/// firms' ledgers (buyer expense, seller revenue) — the money half of a
+/// firm-to-firm trade. Every leg is structurally required: a missing
+/// wallet or book is a typed error, never a silently skipped half of an
+/// "atomic" transfer (ADR 0007 §§4, 8b). The caller has already verified
+/// the buyer can pay.
 pub(crate) fn transfer_money(
     world: &mut World,
     buyer: Entity,
     seller: Entity,
     total: Money,
 ) -> Result<(), EcsError> {
-    if let Some(wallet) = world.get_mut::<Wallet>(buyer)? {
-        wallet.cash = wallet.cash.try_sub(total)?;
-    }
-    if let Some(wallet) = world.get_mut::<Wallet>(seller)? {
-        wallet.cash = wallet.cash.try_add(total)?;
-    }
-    if let Some(books) = world.get_mut::<FirmBooks>(buyer)? {
-        books.expenses = books.expenses.try_add(total)?;
-    }
-    if let Some(books) = world.get_mut::<FirmBooks>(seller)? {
-        books.revenue = books.revenue.try_add(total)?;
-    }
+    let wallet = world
+        .get_mut::<Wallet>(buyer)?
+        .ok_or_else(|| missing("buyer wallet", buyer))?;
+    wallet.cash = wallet.cash.try_sub(total)?;
+    let wallet = world
+        .get_mut::<Wallet>(seller)?
+        .ok_or_else(|| missing("seller wallet", seller))?;
+    wallet.cash = wallet.cash.try_add(total)?;
+    let books = world
+        .get_mut::<FirmBooks>(buyer)?
+        .ok_or_else(|| missing("buyer books", buyer))?;
+    books.expenses = books.expenses.try_add(total)?;
+    let books = world
+        .get_mut::<FirmBooks>(seller)?
+        .ok_or_else(|| missing("seller books", seller))?;
+    books.revenue = books.revenue.try_add(total)?;
     Ok(())
 }
 
 /// Adds `delta` to `holder`'s stock of `good` (negative = remove; the
-/// caller has already verified stock covers a removal).
+/// caller has already verified stock covers a removal). A missing
+/// inventory or good slot is a typed error (ADR 0007 §8b).
 fn adjust_stock(world: &mut World, holder: Entity, good: u32, delta: i64) -> Result<(), EcsError> {
-    if let Some(inventory) = world.get_mut::<Inventory>(holder)?
-        && let Some(stock) = inventory.quantities.get_mut(good as usize)
-    {
-        *stock += delta;
-    }
+    let inventory = world
+        .get_mut::<Inventory>(holder)?
+        .ok_or_else(|| missing("inventory", holder))?;
+    let stock = inventory
+        .quantities
+        .get_mut(good as usize)
+        .ok_or_else(|| missing("inventory slot for the traded good", holder))?;
+    *stock = stock
+        .checked_add(delta)
+        .ok_or(EcsError::Arithmetic(ArithmeticError::Overflow {
+            op: "stock adjust",
+        }))?;
     Ok(())
 }
 
 /// Adds `delta` to one of the ledger's per-good counter vectors, selected
-/// by `select`.
+/// by `select`. A missing ledger or slot is a typed error (ADR 0007 §8b).
 fn count(
     world: &mut World,
     ledger: Entity,
@@ -69,11 +103,17 @@ fn count(
     delta: i64,
     select: fn(&mut EconCounters) -> &mut Vec<i64>,
 ) -> Result<(), EcsError> {
-    if let Some(counters) = world.get_mut::<EconCounters>(ledger)?
-        && let Some(entry) = select(counters).get_mut(good as usize)
-    {
-        *entry += delta;
-    }
+    let counters = world
+        .get_mut::<EconCounters>(ledger)?
+        .ok_or_else(|| missing("conservation ledger", ledger))?;
+    let entry = select(counters)
+        .get_mut(good as usize)
+        .ok_or_else(|| missing("counter slot for the good", ledger))?;
+    *entry = entry
+        .checked_add(delta)
+        .ok_or(EcsError::Arithmetic(ArithmeticError::Overflow {
+            op: "counter add",
+        }))?;
     Ok(())
 }
 
@@ -333,7 +373,11 @@ impl PricingSystem {
         let mut batch_cost = self.tables.economy.overhead_mills_per_batch;
         for (good, quantity) in &recipe.inputs {
             let unit = market.get(*good as usize).copied().unwrap_or(0);
-            batch_cost += mul(unit, *quantity, "pricing input cost")?;
+            batch_cost = add(
+                batch_cost,
+                mul(unit, *quantity, "pricing input cost")?,
+                "pricing batch cost",
+            )?;
         }
         let marked_up = div_ceil(
             mul(
@@ -342,8 +386,13 @@ impl PricingSystem {
                 "pricing markup",
             )?,
             1000,
-        );
-        Ok(div_ceil(marked_up, recipe.output_quantity.max(1)))
+            "pricing markup ceil",
+        )?;
+        div_ceil(
+            marked_up,
+            recipe.output_quantity.max(1),
+            "pricing unit ceil",
+        )
     }
 }
 
@@ -399,9 +448,9 @@ impl System for PricingSystem {
             )? / 1000)
                 .max(1);
             let desired = if stock > target {
-                posted - step
+                posted - step // posted >= min_price >= 1 and step <= posted: no underflow
             } else if stock < target {
-                posted + step
+                add(posted, step, "pricing raise")?
             } else {
                 posted
             };

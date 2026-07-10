@@ -165,6 +165,18 @@ fn validate_demographics(
             "death-rate acceptance band must satisfy min < max".into(),
         ));
     }
+    // Wealth seed range (Phase 4, ADR 0007 §8b): an inverted range would
+    // underflow genesis' uniform draw; a negative bound would seed a
+    // negative wallet (the Wallet invariant forbids it).
+    if demographics.wealth_min_mills < 0
+        || demographics.wealth_min_mills > demographics.wealth_max_mills
+    {
+        return Err(verr(
+            data_root,
+            file,
+            "wealth seed range must satisfy 0 <= min <= max".into(),
+        ));
+    }
     Ok(())
 }
 

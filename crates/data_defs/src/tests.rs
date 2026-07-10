@@ -204,6 +204,31 @@ fn economy_validation_catches_seeded_errors() {
         other => panic!("expected Validation error, got {other:?}"),
     }
 
+    // A recipe listing the same input good twice (ADR 0007 §8b).
+    let root = write_tree(&[
+        (
+            "goods.ron",
+            r#"GoodsConfig(goods: [
+                GoodDef(id: "bread", spoil_per_mille: 100),
+                GoodDef(id: "wheat", spoil_per_mille: 0),
+            ])"#,
+        ),
+        (
+            "recipes.ron",
+            r#"RecipesConfig(recipes: [
+                RecipeDef(id: "bake",
+                    inputs: [GoodQty(good_id: "wheat", quantity: 2), GoodQty(good_id: "wheat", quantity: 3)],
+                    output: GoodQty(good_id: "bread", quantity: 4), batch_hours: 1),
+            ])"#,
+        ),
+    ]);
+    match load(&root) {
+        Err(DataError::Validation { message, .. }) => {
+            assert!(message.contains("more than once"), "{message}");
+        }
+        other => panic!("expected Validation error, got {other:?}"),
+    }
+
     // Controller step out of range.
     let root = write_tree(&[(
         "balance/economy.ron",
@@ -394,6 +419,35 @@ fn people_validation_catches_seeded_errors() {
     let root = write_tree(&[(
         "balance/traits.ron",
         r#"TraitsConfig(traits: [TraitDef(id: "x", min: 500, max: 1500)])"#,
+    )]);
+    assert!(matches!(load(&root), Err(DataError::Validation { .. })));
+
+    // Inverted wealth seed range (ADR 0007 §8b).
+    let root = write_tree(&[(
+        "balance/demographics.ron",
+        r#"DemographicsConfig(
+                age_bands: [AgeBand(min_age_years: 0, max_age_years: 90, weight_per_mille: 1000)],
+                male_per_mille: 505, household_min: 1, household_max: 6,
+                annual_death_rate_min_per_mille: 6, annual_death_rate_max_per_mille: 40,
+                wealth_min_mills: 50000, wealth_max_mills: 20000,
+            )"#,
+    )]);
+    match load(&root) {
+        Err(DataError::Validation { message, .. }) => {
+            assert!(message.contains("wealth seed range"), "{message}");
+        }
+        other => panic!("expected Validation error, got {other:?}"),
+    }
+
+    // Negative wealth bound.
+    let root = write_tree(&[(
+        "balance/demographics.ron",
+        r#"DemographicsConfig(
+                age_bands: [AgeBand(min_age_years: 0, max_age_years: 90, weight_per_mille: 1000)],
+                male_per_mille: 505, household_min: 1, household_max: 6,
+                annual_death_rate_min_per_mille: 6, annual_death_rate_max_per_mille: 40,
+                wealth_min_mills: -1, wealth_max_mills: 20000,
+            )"#,
     )]);
     assert!(matches!(load(&root), Err(DataError::Validation { .. })));
 

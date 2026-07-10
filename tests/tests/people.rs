@@ -399,3 +399,55 @@ fn cli_resume_without_flags_matches_uninterrupted_run() {
     );
     std::fs::remove_file(&save).ok();
 }
+
+/// SPEC §9 across town extinction (ADR 0007 §8b): the economy outlives
+/// its citizens, so a save taken AFTER the last citizen died must resume
+/// through the derived-from-save schedule and match the uninterrupted
+/// run — firms keep producing, trading, repricing, spoiling, and the
+/// auditor keeps watching, with zero citizens.
+#[test]
+fn extinct_town_resumes_identically_across_save_load() {
+    let defs = defs_with_flat_mortality(1_000_000_000);
+    let spec = WorldSpec::town(Seed::new(33), 30);
+    let total = 3 * 1440 + 10; // several post-extinction day boundaries
+    let split = 1440 + 7; // save well after everyone died on day 0
+
+    let (mut solid, mut solid_schedule) = runner::build_simulation(&spec, &defs).expect("build");
+    solid.run_ticks(&mut solid_schedule, total).expect("run");
+
+    let (mut first, mut first_schedule) = runner::build_simulation(&spec, &defs).expect("build");
+    first.run_ticks(&mut first_schedule, split).expect("run");
+    assert_eq!(
+        headless::inspect::population(first.world()).expect("count"),
+        0,
+        "the save point must be post-extinction to be probative"
+    );
+
+    let save = persistence::save_to_bytes(&first).expect("save");
+    let mut resumed = persistence::load_from_bytes(
+        &save,
+        runner::load_config(&defs).expect("config"),
+        runner::register_world,
+    )
+    .expect("load");
+    let derived = runner::derive_spec_from_world(resumed.world()).expect("derive");
+    assert_eq!(derived.citizens, 0);
+    assert!(
+        derived.economy,
+        "the ledger keeps the economy (and auditor) scheduled after extinction"
+    );
+    let mut resumed_schedule = runner::build_schedule(&derived, &defs);
+    resumed
+        .run_ticks(&mut resumed_schedule, total - split)
+        .expect("resume");
+
+    assert_eq!(
+        solid.state_hash().expect("hash"),
+        resumed.state_hash().expect("hash"),
+        "a post-extinction resume diverged from the uninterrupted run"
+    );
+    assert!(
+        debug_tools::audit_economy(resumed.world()).expect("audit"),
+        "conservation holds in the empty town"
+    );
+}

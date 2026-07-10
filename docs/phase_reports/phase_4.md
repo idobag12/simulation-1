@@ -53,15 +53,50 @@ Also proven this phase:
 ## Verification process
 
 `scripts/check.sh` green at the tagged commit (fmt, clippy `-D warnings`,
-full workspace suite — 130+ tests including the 1M-tick, 10k-citizen, and
+full workspace suite — 140+ tests including the 1M-tick, 10k-citizen, and
 100-day-conservation runs). Adversarial multi-agent review (ultracode):
 five independent reviewers (determinism, conservation/economics,
 standards, anti-shortcut/ADR-fidelity, test-coverage) over the phase
-diff, each finding then adversarially verified by an independent agent
-instructed to refute it. Confirmed findings and their fixes are listed
-below; refuted findings are recorded in the review transcript.
+diff; every finding verified against the code before acting. Confirmed
+findings, all fixed in the follow-up commit (decisions recorded first in
+ADR 0007 §8b):
 
-<!-- REVIEW-RESULTS -->
+- **Post-extinction resume dropped the economy** (SPEC §9, found twice
+  independently): the schedule was gated on the citizen count, but firms
+  and the auditor outlive citizens. `WorldSpec` gained an `economy` flag
+  derived from the saved ledger; `save-load-check` now resumes through
+  the same derived-spec path as `run --load`; regression test
+  `people::extinct_town_resumes_identically_across_save_load`.
+- **Wealth seed range unvalidated** (found three times): an inverted or
+  negative range could underflow genesis or seed a negative wallet. Now
+  validated `0 ≤ min ≤ max` like every sibling range, with seeded-error
+  tests.
+- **Auditor blind to negative wallets**: the Wallet invariant is now
+  audited (negative balances cancel out of `Σ wallets == issued`, so the
+  sum alone could not catch a broken spending guard).
+- **Duplicate recipe input goods could double-spend stock below zero**:
+  the batch-start check tested each entry independently; duplicates are
+  now rejected at load.
+- **Silently skippable transaction legs**: the transfer/stock/counter
+  helpers (and `execute_purchase`, `spoil_stock`) no-opped on missing
+  components, deferring drift to an unattributed audit halt a day later.
+  Structurally required legs now error at the fault site, naming the leg.
+- **Unchecked arithmetic on conservation paths** (spoilage multiply,
+  pricing accumulations, counter adds, the audit's own sums): now
+  checked with typed overflow errors.
+- **Coverage gaps on claimed behaviors**, all closed with direct tests:
+  purchase abort when stock/cash vanished mid-travel, same-tick two-buyer
+  contention on the last unit, halt-on-drift proven END TO END through a
+  scheduled run, the trade cash bound actually binding, production input
+  starvation idling honestly, buy-actions-in-flight asserted in the v5
+  fixture, and the CLI `economy` command dispatch.
+
+Refuted findings (recorded, no change): the `resolve_*` `unwrap_or(0)`
+id-lookup convention (pre-existing, reviewed in Phase 3; validation and
+resolution are paired inside `data_defs::load` and the fallback is
+documented as unreachable); ADR under-documentation of the locations.ron
+balance edits and the seeded-stock-counts-as-produced rule — fixed as
+documentation (ADR 0007 §§1–2 amendments), not code.
 
 ## Deviations from spec (all pre-declared in ADRs)
 
