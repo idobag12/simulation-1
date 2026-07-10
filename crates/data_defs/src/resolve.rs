@@ -88,7 +88,32 @@ pub fn resolve_ai(defs: &DataDefs) -> sim_ai::AiTables {
             .position(|skill| skill.id == defs.skills.school.taught_skill_id)
             .unwrap_or(0) as u32,
         school_gain_per_mille: defs.skills.school.gain_per_attendance_per_mille,
-        social: defs.social,
+        social: sim_ai::config::SocialTables {
+            edge_cap: defs.social.edge_cap,
+            friend_drift_per_meeting_per_mille: defs.social.friend_drift_per_meeting_per_mille,
+            romance_drift_per_meeting_per_mille: defs.social.romance_drift_per_meeting_per_mille,
+            decay_per_day_per_mille: defs.social.decay_per_day_per_mille,
+            romance_min_sociability_product_per_mille: defs
+                .social
+                .romance_min_sociability_product_per_mille,
+            marriage_threshold_per_mille: defs.social.marriage_threshold_per_mille,
+            social_bond_weight_per_mille: defs.social.social_bond_weight_per_mille,
+            belief_cap: defs.social.belief_cap,
+            drift_need: defs
+                .people
+                .needs
+                .needs
+                .iter()
+                .position(|need| need.id == defs.social.drift_need_id)
+                .unwrap_or(0) as u32,
+            spark_trait: defs
+                .people
+                .traits
+                .traits
+                .iter()
+                .position(|t| t.id == defs.social.spark_trait_id)
+                .unwrap_or(0) as u32,
+        },
         skill_count: defs.skills.skills.len() as u32,
     }
 }
@@ -213,6 +238,7 @@ pub fn resolve_economy(defs: &DataDefs) -> sim_economy::EconTables {
             home_location_kind: defs.locations.home_kind().unwrap_or(0),
         },
         labor_skill_weight_per_mille: defs.skills.labor_skill_weight_per_mille,
+        doing_gain_per_shift_per_mille: defs.skills.doing_gain_per_shift_per_mille,
         public_skill: defs
             .skills
             .skills

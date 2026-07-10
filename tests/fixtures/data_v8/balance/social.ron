@@ -1,5 +1,9 @@
 // The social graph and gossip (SPEC §11; ADR 0010 §§2-3).
 SocialConfig(
+    // Bonds drift where this need is satisfied (the leisure venues);
+    // romance sparks screen on this trait's product.
+    drift_need_id: "social",
+    spark_trait_id: "sociability",
     // Bounded edges per citizen; the weakest non-kin edge evicts.
     edge_cap: 12,
     // Shared leisure grows bonds; absence decays them (per-mille).

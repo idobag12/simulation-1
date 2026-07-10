@@ -32,6 +32,11 @@ enum Transition {
     Purchase {
         at: Entity,
     },
+    /// A completed school attendance (Phase 7, ADR 0010 §1): the skill
+    /// bump and the fact land in the apply pass.
+    Graduate {
+        at: Entity,
+    },
 }
 
 /// Tick-rate system (after `DecideSystem`): advances every
@@ -134,6 +139,32 @@ impl ActSystem {
                     next,
                 }
             }
+            CurrentAction::SchoolTravel { target, remaining } => {
+                if remaining > 1 {
+                    Transition::Continue(CurrentAction::SchoolTravel {
+                        target,
+                        remaining: remaining - 1,
+                    })
+                } else {
+                    Transition::Arrive {
+                        at: target,
+                        next: CurrentAction::Attend {
+                            at: target,
+                            remaining: self.tables.school_attend_ticks,
+                        },
+                    }
+                }
+            }
+            CurrentAction::Attend { at, remaining } => {
+                if remaining > 1 {
+                    Transition::Continue(CurrentAction::Attend {
+                        at,
+                        remaining: remaining - 1,
+                    })
+                } else {
+                    Transition::Graduate { at }
+                }
+            }
             CurrentAction::Consume {
                 at,
                 need_index,
@@ -160,7 +191,28 @@ impl ActSystem {
                     .ok_or(EcsError::InternalCorruption(
                         "performing at an entity that is not a location",
                     ))?;
-                let rate = self.tables.satisfier_rate(kind, need_index).unwrap_or(0);
+                let mut rate = self.tables.satisfier_rate(kind, need_index).unwrap_or(0);
+                // Bonds feed utility (Phase 7, ADR 0010 §2): satisfying
+                // the drift need among present friends gains more —
+                // per friend, weight/1000 × strength/1000 of the rate.
+                if need_index == self.tables.social.drift_need && rate > 0 {
+                    let mut bonus: i64 = 0;
+                    if let Some(relationships) =
+                        world.get::<core_ecs::sim_interface::Relationships>(entity)?
+                    {
+                        for edge in &relationships.edges {
+                            if matches!(edge.kind, core_ecs::sim_interface::RelKind::Friend)
+                                && world.get::<Position>(edge.other)?.map(|p| p.at) == Some(at)
+                            {
+                                bonus += rate
+                                    .saturating_mul(self.tables.social.social_bond_weight_per_mille)
+                                    .saturating_mul(i64::from(edge.strength_per_mille))
+                                    / 1_000_000;
+                            }
+                        }
+                    }
+                    rate = rate.saturating_add(bonus);
+                }
                 let level = world
                     .get::<Needs>(entity)?
                     .and_then(|needs| needs.levels.get(need_index as usize).copied())
@@ -242,7 +294,37 @@ impl System for ActSystem {
                     world.remove::<CurrentAction>(entity)?;
                 }
                 Transition::Purchase { at } => {
-                    execute_purchase(world, entity, at, self.tables.sales_tax_per_mille)?;
+                    execute_purchase(
+                        world,
+                        entity,
+                        at,
+                        self.tables.sales_tax_per_mille,
+                        self.tables.social.belief_cap as usize,
+                    )?;
+                }
+                Transition::Graduate { at } => {
+                    // The skill bump (lazy row: migrated citizens learn
+                    // on their first attendance) and the fact.
+                    world.remove::<CurrentAction>(entity)?;
+                    let skill = self.tables.school_taught_skill as usize;
+                    let gain = self.tables.school_gain_per_mille;
+                    let mut skills = world
+                        .get::<core_ecs::sim_interface::Skills>(entity)?
+                        .cloned()
+                        .unwrap_or(core_ecs::sim_interface::Skills {
+                            levels: vec![0; self.tables.skill_count as usize],
+                        });
+                    if let Some(level) = skills.levels.get_mut(skill) {
+                        *level = level.saturating_add(gain).min(1000);
+                    }
+                    let new_level = skills.levels.get(skill).copied().unwrap_or(0);
+                    world.insert(entity, skills)?;
+                    world.emit(&core_ecs::sim_interface::SchoolAttended {
+                        pupil: entity,
+                        skill: self.tables.school_taught_skill,
+                        new_level,
+                    })?;
+                    let _ = at;
                 }
             }
         }
@@ -262,6 +344,7 @@ fn execute_purchase(
     buyer: Entity,
     seller: Entity,
     sales_tax_per_mille: i64,
+    belief_cap: usize,
 ) -> Result<(), EcsError> {
     let offer = match world.get::<RetailOffer>(seller)? {
         Some(offer) => *offer,
@@ -373,6 +456,14 @@ fn execute_purchase(
         .and_then(|needs| needs.levels.get_mut(offer.need_index as usize))
         .ok_or_else(|| missing("need level for the offered need", buyer))?;
     *level = level.gain(offer.gain_per_unit);
+    // …the corrected belief (Phase 7, ADR 0010 §3: experience
+    // overwrites — you saw the price tag)…
+    let mut beliefs = world
+        .get::<core_ecs::sim_interface::Beliefs>(buyer)?
+        .cloned()
+        .unwrap_or_default();
+    crate::systems_social::experience_price(&mut beliefs, seller, price, belief_cap);
+    world.insert(buyer, beliefs)?;
     // …and the fact.
     world.emit(&GoodsPurchased {
         buyer,

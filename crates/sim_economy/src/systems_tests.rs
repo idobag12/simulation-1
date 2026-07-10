@@ -129,6 +129,7 @@ pub(crate) fn tables() -> EconTables {
         },
         labor_skill_weight_per_mille: 0,
         public_skill: 0,
+        doing_gain_per_shift_per_mille: 0,
     }
 }
 
@@ -178,6 +179,9 @@ pub(crate) fn world_with_firms(tables: &EconTables) -> World {
         .expect("register");
     world
         .register::<core_ecs::sim_interface::Residence>()
+        .expect("register");
+    world
+        .register::<core_ecs::sim_interface::Skills>()
         .expect("register");
     world.register_event::<GoodsPurchased>().expect("register");
     world.register_event::<PriceChanged>().expect("register");

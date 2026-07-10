@@ -140,6 +140,34 @@ impl System for PayrollSystem {
                     wage,
                     self.tables.money.income_per_mille,
                 )?;
+                // Learning by doing (Phase 7, ADR 0010 §1): a paid day
+                // raises the employer's recipe skill (the treasury's
+                // slots teach the public skill). Lazy rows: migrated
+                // citizens learn on their first payday.
+                let skill = match world.get::<Firm>(employer)? {
+                    Some(firm) => self
+                        .tables
+                        .recipes
+                        .get(firm.recipe as usize)
+                        .and_then(|recipe| recipe.skill),
+                    None => Some(self.tables.public_skill),
+                };
+                if let Some(skill) = skill {
+                    let gain = self.tables.doing_gain_per_shift_per_mille;
+                    if gain > 0 {
+                        let mut skills = world
+                            .get::<core_ecs::sim_interface::Skills>(citizen)?
+                            .cloned()
+                            .unwrap_or(core_ecs::sim_interface::Skills { levels: Vec::new() });
+                        if skills.levels.len() <= skill as usize {
+                            skills.levels.resize(skill as usize + 1, 0);
+                        }
+                        if let Some(level) = skills.levels.get_mut(skill as usize) {
+                            *level = level.saturating_add(gain).min(1000);
+                        }
+                        world.insert(citizen, skills)?;
+                    }
+                }
             } else {
                 world.remove::<Employment>(citizen)?;
                 world.emit(&Fired {
@@ -243,11 +271,15 @@ impl LaborMarketSystem {
         LaborMarketSystem { tables }
     }
 
-    /// A citizen's reservation wage (exact integer arithmetic).
+    /// A citizen's reservation wage (exact integer arithmetic). Skill
+    /// raises it (Phase 7, ADR 0010 §1): mastery is an outside option —
+    /// this is where the skill wage premium enters the double auction
+    /// (the ask side knows its owner; a uniform bid cannot).
     pub(crate) fn reservation(
         &self,
         cash_mills: i64,
         trait_per_mille: i64,
+        skill_per_mille: i64,
     ) -> Result<i64, EcsError> {
         let labor = &self.tables.labor;
         let base = labor.reservation_base_mills;
@@ -269,9 +301,16 @@ impl LaborMarketSystem {
             .and_then(|x| x.checked_mul(trait_per_mille.clamp(0, 1000)))
             .ok_or_else(|| overflow("reservation discount"))?
             / 1_000_000;
+        // Skill premium: base × weight/1000 × skill/1000.
+        let premium = base
+            .checked_mul(self.tables.labor_skill_weight_per_mille)
+            .and_then(|x| x.checked_mul(skill_per_mille.clamp(0, 1000)))
+            .ok_or_else(|| overflow("reservation premium"))?
+            / 1_000_000;
         Ok(base
             .checked_add(raise)
             .and_then(|x| x.checked_sub(discount))
+            .and_then(|x| x.checked_add(premium))
             .ok_or_else(|| overflow("reservation total"))?
             .max(1))
     }
@@ -375,7 +414,14 @@ impl System for LaborMarketSystem {
                         .copied()
                 })
                 .unwrap_or(0);
-            asks.push((citizen, self.reservation(cash, i64::from(trait_per_mille))?));
+            let skill = world
+                .get::<core_ecs::sim_interface::Skills>(citizen)?
+                .map(|skills| skills.levels.iter().copied().max().unwrap_or(0))
+                .unwrap_or(0);
+            asks.push((
+                citizen,
+                self.reservation(cash, i64::from(trait_per_mille), i64::from(skill))?,
+            ));
         }
         let seeking = asks.len() as u32;
         asks.sort_by_key(|(citizen, ask)| (*ask, citizen.index()));

@@ -220,33 +220,69 @@ fn v6_to_v7(mut v6: SaveBodyV6) -> Result<SaveBody, PersistError> {
     Ok(v6)
 }
 
+type SaveBodyV7 = SaveBody;
+
+// Registration growth from v7 to v8 (Phase 7, ADR 0010 §6). Historical
+// facts of the format, frozen here forever.
+const V8_ADDED_COMPONENTS: [&str; 4] = [
+    "people.skills",
+    "social.relationships",
+    "social.beliefs",
+    "people.school_age",
+];
+const V8_ADDED_EVENTS: [&str; 3] = ["social.married", "people.born", "people.school_attended"];
+
+/// Pure step v7 → v8 (ADR 0010 §6): the registration grew by the social
+/// components and lifecycle events, all appended after the v7 set. A v7
+/// world carried none of them, so each new store is empty and the
+/// event-name list extends losslessly. Migrated citizens have no
+/// skills, edges, or beliefs — every Phase 7 system builds state from
+/// lived events, inventing nothing.
+fn v7_to_v8(mut v7: SaveBodyV7) -> Result<SaveBody, PersistError> {
+    let empty_store = codec::to_bytes(&Vec::<(u32, u8)>::new())?;
+    for name in V8_ADDED_COMPONENTS {
+        v7.components.push((name.to_owned(), empty_store.clone()));
+    }
+    if !v7.events.is_empty() {
+        v7.events = core_events::extend_registration_bytes(&v7.events, &V8_ADDED_EVENTS)
+            .map_err(EcsError::from)?;
+    }
+    Ok(v7)
+}
+
 /// Migrates a decompressed save body from `version` to the current
-/// [`SaveBody`], chaining pure steps (`v1 → v2 → … → v7`).
+/// [`SaveBody`], chaining pure steps (`v1 → v2 → … → v8`).
 pub(crate) fn migrate_to_current(version: u32, raw: Vec<u8>) -> Result<SaveBody, PersistError> {
     match version {
         1 => {
             let v1: SaveBodyV1 = codec::from_bytes(&raw)?;
-            v6_to_v7(v5_to_v6(v4_to_v5(v3_to_v4(v2_to_v3(v1_to_v2(v1))?)?)?)?)
+            v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v3_to_v4(v2_to_v3(
+                v1_to_v2(v1),
+            )?)?)?)?)?)
         }
         2 => {
             let v2: SaveBodyV2 = codec::from_bytes(&raw)?;
-            v6_to_v7(v5_to_v6(v4_to_v5(v3_to_v4(v2_to_v3(v2)?)?)?)?)
+            v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v3_to_v4(v2_to_v3(v2)?)?)?)?)?)
         }
         3 => {
             let v3: SaveBodyV3 = codec::from_bytes(&raw)?;
-            v6_to_v7(v5_to_v6(v4_to_v5(v3_to_v4(v3)?)?)?)
+            v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v3_to_v4(v3)?)?)?)?)
         }
         4 => {
             let v4: SaveBodyV4 = codec::from_bytes(&raw)?;
-            v6_to_v7(v5_to_v6(v4_to_v5(v4)?)?)
+            v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v4)?)?)?)
         }
         5 => {
             let v5: SaveBodyV5 = codec::from_bytes(&raw)?;
-            v6_to_v7(v5_to_v6(v5)?)
+            v7_to_v8(v6_to_v7(v5_to_v6(v5)?)?)
         }
         6 => {
             let v6: SaveBodyV6 = codec::from_bytes(&raw)?;
-            v6_to_v7(v6)
+            v7_to_v8(v6_to_v7(v6)?)
+        }
+        7 => {
+            let v7: SaveBodyV7 = codec::from_bytes(&raw)?;
+            v7_to_v8(v7)
         }
         FORMAT_VERSION => Ok(codec::from_bytes(&raw)?),
         other => Err(PersistError::UnsupportedVersion(other)),

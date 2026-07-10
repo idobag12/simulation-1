@@ -35,6 +35,11 @@ struct Decider {
     wealth_mills: i64,
     /// The employer, when the citizen holds a job (Phase 5).
     workplace: Option<Entity>,
+    /// The school, when the citizen is school-age (Phase 7).
+    school: Option<Entity>,
+    /// Believed shop prices `(seller index, mills)` — gossip and
+    /// experience shape shop choice (Phase 7, ADR 0010 §3).
+    believed: Vec<(u32, i64)>,
 }
 
 /// One retail offer snapshotted for scoring: the selling entity, the
@@ -162,7 +167,16 @@ impl DecideSystem {
             / MICRO;
         let mu = (self.tables.mu_scale_micro as f64 / MICRO)
             / (1.0 + decider.wealth_mills as f64 / self.tables.half_wealth_mills as f64);
-        let money_cost = offer.unit_price.mills() as f64 * mu;
+        // The BELIEVED price weighs the choice when one exists (Phase 7,
+        // ADR 0010 §3) — the till still charges the posted price, and
+        // experience corrects the belief there.
+        let believed = decider
+            .believed
+            .iter()
+            .find(|(shop, _)| *shop == snapshot.seller.index())
+            .map(|(_, mills)| *mills)
+            .unwrap_or(offer.unit_price.mills());
+        let money_cost = believed as f64 * mu;
 
         gain * self.urgency(deficit) * self.trait_factor(&decider.traits, offer.need_index)
             - time_cost
@@ -185,6 +199,20 @@ impl DecideSystem {
         self.tables.work_bias_micro as f64 / MICRO - time_cost
     }
 
+    /// Scores attending school (Phase 7, ADR 0010 §1): the same shape
+    /// as the work bias — obligations bias, never dictate.
+    fn score_school(&self, decider: &Decider, school: Entity) -> f64 {
+        let travel_ticks = if decider.at == Some(school) {
+            0
+        } else {
+            i64::from(self.tables.travel_ticks)
+        };
+        let time_cost = (travel_ticks + i64::from(self.tables.school_attend_ticks)) as f64
+            * self.tables.time_cost_micro_per_tick as f64
+            / MICRO;
+        self.tables.school_bias_micro as f64 / MICRO - time_cost
+    }
+
     /// Enumerates and scores a decider's candidates; returns the dump and
     /// the chosen action. Enumeration order (= tie-break order, SPEC §11):
     /// own home (satisfier data order), public locations (entity order ×
@@ -197,6 +225,7 @@ impl DecideSystem {
         offers: &[OfferSnapshot],
         home_kind: Option<u32>,
         work_window: bool,
+        school_window: bool,
     ) -> (LastDecision, CurrentAction) {
         let mut candidates: Vec<ScoredCandidate> = Vec::new();
         let mut scores: Vec<f64> = Vec::new();
@@ -266,6 +295,14 @@ impl DecideSystem {
             });
             scores.push(score);
         }
+        if school_window && let Some(school) = decider.school {
+            let score = self.score_school(decider, school);
+            candidates.push(ScoredCandidate {
+                action: CandidateAction::AttendSchool { location: school },
+                score_micro: quantize(score),
+            });
+            scores.push(score);
+        }
         candidates.push(ScoredCandidate {
             action: CandidateAction::Idle,
             score_micro: 0,
@@ -320,6 +357,19 @@ impl DecideSystem {
                     }
                 } else {
                     CurrentAction::WorkTravel {
+                        target: location,
+                        remaining: self.tables.travel_ticks,
+                    }
+                }
+            }
+            CandidateAction::AttendSchool { location } => {
+                if decider.at == Some(location) {
+                    CurrentAction::Attend {
+                        at: location,
+                        remaining: self.tables.school_attend_ticks,
+                    }
+                } else {
+                    CurrentAction::SchoolTravel {
                         target: location,
                         remaining: self.tables.travel_ticks,
                     }
@@ -398,6 +448,12 @@ impl System for DecideSystem {
             list
         };
 
+        // The school (Phase 7): the first location of the school kind.
+        let school_entity: Option<Entity> = world
+            .iter::<Location>()?
+            .find(|(_, location)| location.kind == self.tables.school_location_kind)
+            .map(|(entity, _)| entity);
+
         // Deposit balances (Phase 6): wealth = wallet + vault row.
         let mut vault: std::collections::BTreeMap<u32, i64> = std::collections::BTreeMap::new();
         if let Some((_, book)) = world.iter::<core_ecs::sim_interface::BankBook>()?.next() {
@@ -438,15 +494,37 @@ impl System for DecideSystem {
                 workplace: world
                     .get::<Employment>(entity)?
                     .map(|employment| employment.employer),
+                school: match world.get::<core_ecs::sim_interface::SchoolAge>(entity)? {
+                    Some(_) => school_entity,
+                    None => None,
+                },
+                believed: world
+                    .get::<core_ecs::sim_interface::Beliefs>(entity)?
+                    .map(|beliefs| {
+                        beliefs
+                            .prices
+                            .iter()
+                            .map(|(shop, price)| (shop.index(), price.mills()))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
             });
         }
         let work_window = minute_of_day >= self.tables.work_start_minute
             && minute_of_day < self.tables.work_end_minute;
+        let school_window = minute_of_day >= self.tables.school_start_minute
+            && minute_of_day < self.tables.school_end_minute;
 
         // Pass 2: decide and write (entity order preserved).
         for decider in deciders {
-            let (mut dump, action) =
-                self.decide(&decider, &publics, &offers, home_kind, work_window);
+            let (mut dump, action) = self.decide(
+                &decider,
+                &publics,
+                &offers,
+                home_kind,
+                work_window,
+                school_window,
+            );
             dump.tick = ctx.tick;
             world.insert(decider.entity, action)?;
             world.insert(decider.entity, dump)?;

@@ -1,7 +1,8 @@
 //! Utility AI core (SPEC §11, §15 Phase 3; design in ADR 0006): the
 //! action framework, need-based float scoring weighted by personality,
 //! sleep schedules as a scoring bias, and inspectable decision dumps.
-//! Planners with goals, memory, and relationships arrive in Phase 7.
+//! Phase 7 (ADR 0010): the relationship graph drifts by co-presence,
+//! gossip spreads price beliefs, and school attendance raises skills.
 //!
 //! Invariants owned by this crate:
 //! - Floats appear ONLY inside scoring (`+ − × ÷` and comparisons — no
@@ -19,7 +20,9 @@
 pub mod components;
 pub mod config;
 pub mod systems;
+pub mod systems_social;
 
 pub use components::{CandidateAction, CurrentAction, DailyPlan, LastDecision, ScoredCandidate};
-pub use config::{AiConfig, AiTables};
+pub use config::{AiConfig, AiTables, SocialConfig};
 pub use systems::{ActSystem, DecideSystem, PlanSystem};
+pub use systems_social::{RelationshipDecaySystem, SocialDriftSystem};

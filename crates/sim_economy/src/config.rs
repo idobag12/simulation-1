@@ -246,4 +246,6 @@ pub struct EconTables {
     pub labor_skill_weight_per_mille: i64,
     /// The skill (data order) the public employer's slots reward.
     pub public_skill: u32,
+    /// Per-mille mastery gained per paid day (learning by doing).
+    pub doing_gain_per_shift_per_mille: u16,
 }

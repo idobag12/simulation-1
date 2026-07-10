@@ -41,7 +41,7 @@ use thiserror::Error;
 /// v5 = Phase 4 (+ economy registrations and events, ADR 0007 §9);
 /// v6 = Phase 5 (+ labor registrations and events, ADR 0008 §8);
 /// v7 = Phase 6 (+ money registrations and events, ADR 0009 §6).
-pub const FORMAT_VERSION: u32 = 7;
+pub const FORMAT_VERSION: u32 = 8;
 
 /// 8-byte file magic identifying an Embervale save.
 pub const MAGIC: &[u8; 8] = b"EMBRSAV1";

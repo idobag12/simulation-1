@@ -140,7 +140,7 @@ fn a_scheduled_run_halts_on_seeded_deposit_drift() {
 /// clamped to a single rate, the purchase market pushed out of the
 /// horizon (so mortgages don't blur the construction channel), and the
 /// builder seeded lean enough that later batches need materials credit.
-fn run_pegged_twin(rate_per_million_daily: i64) -> (usize, i64, i64) {
+fn run_pegged_twin(rate_per_million_daily: i64) -> (usize, i64, i64, i64) {
     let mut defs = pinned_defs();
     defs.bank.policy_neutral_per_million_daily = rate_per_million_daily;
     defs.bank.policy_min_per_million_daily = rate_per_million_daily;
@@ -165,9 +165,11 @@ fn run_pegged_twin(rate_per_million_daily: i64) -> (usize, i64, i64) {
     assert!(debug_tools::audit_economy(world).expect("audit"));
     let homes_end = world.iter::<Ownership>().expect("query").count();
     let outstanding: i64 = book.loans.iter().map(|loan| loan.principal.mills()).sum();
+    let granted: i64 = book.granted.iter().map(|(_, total)| total.mills()).sum();
     (
         homes_end - homes_start,
         outstanding,
+        granted,
         book.interest_received.mills(),
     )
 }
@@ -180,8 +182,8 @@ fn run_pegged_twin(rate_per_million_daily: i64) -> (usize, i64, i64) {
 /// — no credit, no further starts.
 #[test]
 fn a_rate_change_shifts_credit_and_construction() {
-    let (built_low, outstanding_low, interest_low) = run_pegged_twin(100);
-    let (built_high, outstanding_high, _) = run_pegged_twin(150_000);
+    let (built_low, outstanding_low, granted_low, interest_low) = run_pegged_twin(100);
+    let (built_high, outstanding_high, granted_high, _) = run_pegged_twin(150_000);
 
     assert!(
         built_low > built_high,
@@ -192,18 +194,24 @@ fn a_rate_change_shifts_credit_and_construction() {
         "dear money slows construction, it does not abolish the builder \
          (the till-funded batches still happen: {built_high})"
     );
+    // Credit EXTENDED is the robust measure (a snapshot of outstanding
+    // principal can catch a loan mid-default); dear money extends none.
     assert!(
-        outstanding_low > outstanding_high,
-        "cheap money carries more outstanding credit ({outstanding_low} \
-         vs {outstanding_high} mills)"
+        granted_low > granted_high,
+        "cheap money extends more credit ({granted_low} vs {granted_high} mills)"
     );
     assert!(
-        outstanding_low > 0 && interest_low > 0,
+        granted_low > 0 && interest_low > 0,
         "the low twin's credit is real and serviced"
     );
     assert_eq!(
-        outstanding_high, 0,
+        granted_high, 0,
         "at the dear peg the hurdle fails while the till is short — no \
          materials loan is ever written"
+    );
+    assert!(
+        outstanding_low >= outstanding_high,
+        "and the dear town never carries more live principal \
+         ({outstanding_low} vs {outstanding_high})"
     );
 }

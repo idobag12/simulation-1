@@ -154,8 +154,8 @@ pub struct AiTables {
     pub school_taught_skill: u32,
     /// Per-mille mastery per completed attendance.
     pub school_gain_per_mille: u16,
-    /// The social graph's tunables (Phase 7, ADR 0010 §§2–3).
-    pub social: SocialConfig,
+    /// The social graph's resolved tunables (Phase 7, ADR 0010 §§2–3).
+    pub social: SocialTables,
     /// Total skills in data order (the `Skills.levels` length).
     pub skill_count: u32,
 }
@@ -174,9 +174,14 @@ impl AiTables {
 
 /// `data/balance/social.ron` (Phase 7, ADR 0010 §§2–3): the relationship
 /// graph's drifts and caps, the marriage threshold, and gossip.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SocialConfig {
+    /// The need (from `needs.ron`) whose satisfiers are the leisure
+    /// venues where bonds drift.
+    pub drift_need_id: String,
+    /// The trait (from `traits.ron`) whose product screens romance.
+    pub spark_trait_id: String,
     /// Bounded edges per citizen; the weakest non-kin edge evicts.
     pub edge_cap: u32,
     /// Friend-edge growth per shared leisure meeting, per-mille.
@@ -194,4 +199,30 @@ pub struct SocialConfig {
     pub social_bond_weight_per_mille: i64,
     /// Bounded believed-price rows per citizen.
     pub belief_cap: u32,
+}
+
+/// The resolved social tables (string ids → indices), carried in
+/// [`AiTables`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SocialTables {
+    /// See [`SocialConfig::edge_cap`].
+    pub edge_cap: u32,
+    /// See [`SocialConfig::friend_drift_per_meeting_per_mille`].
+    pub friend_drift_per_meeting_per_mille: i32,
+    /// See [`SocialConfig::romance_drift_per_meeting_per_mille`].
+    pub romance_drift_per_meeting_per_mille: i32,
+    /// See [`SocialConfig::decay_per_day_per_mille`].
+    pub decay_per_day_per_mille: i32,
+    /// See [`SocialConfig::romance_min_sociability_product_per_mille`].
+    pub romance_min_sociability_product_per_mille: i32,
+    /// See [`SocialConfig::marriage_threshold_per_mille`].
+    pub marriage_threshold_per_mille: i32,
+    /// See [`SocialConfig::social_bond_weight_per_mille`].
+    pub social_bond_weight_per_mille: i64,
+    /// See [`SocialConfig::belief_cap`].
+    pub belief_cap: u32,
+    /// The drift need (data order index).
+    pub drift_need: u32,
+    /// The romance-screen trait (data order index).
+    pub spark_trait: u32,
 }

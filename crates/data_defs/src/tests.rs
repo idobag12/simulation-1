@@ -79,6 +79,7 @@ const GOOD_SKILLS: &str = r#"SkillsConfig(
         public_skill_id: "letters",
     )"#;
 const GOOD_SOCIAL: &str = r#"SocialConfig(
+        drift_need_id: "hunger", spark_trait_id: "ambition",
         edge_cap: 12, friend_drift_per_meeting_per_mille: 30,
         romance_drift_per_meeting_per_mille: 25, decay_per_day_per_mille: 5,
         romance_min_sociability_product_per_mille: 90, marriage_threshold_per_mille: 700,

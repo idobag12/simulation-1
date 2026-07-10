@@ -369,6 +369,34 @@ pub(crate) fn validate_social(
     }
 
     let s = "balance/social.ron";
+    if !people
+        .needs
+        .needs
+        .iter()
+        .any(|need| need.id == social.drift_need_id)
+    {
+        return Err(e(
+            s,
+            format!(
+                "drift_need_id `{}` is not a defined need",
+                social.drift_need_id
+            ),
+        ));
+    }
+    if !people
+        .traits
+        .traits
+        .iter()
+        .any(|t| t.id == social.spark_trait_id)
+    {
+        return Err(e(
+            s,
+            format!(
+                "spark_trait_id `{}` is not a defined trait",
+                social.spark_trait_id
+            ),
+        ));
+    }
     if social.edge_cap == 0 || social.belief_cap == 0 {
         return Err(e(s, "edge_cap and belief_cap must be >= 1".into()));
     }
@@ -432,6 +460,5 @@ pub(crate) fn validate_social(
     if fertility.trait_mutation_per_mille > 1000 {
         return Err(e(f, "trait_mutation_per_mille must be <= 1000".into()));
     }
-    let _ = people;
     Ok(())
 }

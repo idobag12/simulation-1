@@ -272,7 +272,7 @@ impl FertilitySystem {
         // parents ± data mutation — all from the fertility stream, in a
         // fixed draw order.
         let sex_draw = world.rng(FERTILITY_STREAM).next_u64();
-        let sex = if sex_draw % 2 == 0 {
+        let sex = if sex_draw.is_multiple_of(2) {
             Sex::Female
         } else {
             Sex::Male

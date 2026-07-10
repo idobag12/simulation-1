@@ -79,6 +79,22 @@ pub enum CurrentAction {
         /// Ticks of this work stint left.
         remaining: u32,
     },
+    /// En route to school (Phase 7, ADR 0010 §1; appended variants —
+    /// old saves decode unchanged).
+    SchoolTravel {
+        /// The school location entity.
+        target: Entity,
+        /// Ticks of travel left.
+        remaining: u32,
+    },
+    /// Attending school: completion raises the taught skill and emits
+    /// the `SchoolAttended` fact.
+    Attend {
+        /// The school location entity.
+        at: Entity,
+        /// Ticks of this attendance left.
+        remaining: u32,
+    },
 }
 
 impl Component for CurrentAction {
@@ -151,6 +167,11 @@ pub enum CandidateAction {
     /// ADR 0008 §2).
     Work {
         /// The employer's firm entity.
+        location: Entity,
+    },
+    /// Attend school (appended variant; Phase 7, ADR 0010 §1).
+    AttendSchool {
+        /// The school location entity.
         location: Entity,
     },
 }

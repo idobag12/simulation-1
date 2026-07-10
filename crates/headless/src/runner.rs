@@ -141,6 +141,10 @@ pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register::<core_ecs::sim_interface::Tenancy>()?;
     world.register::<core_ecs::sim_interface::BorrowerStatus>()?;
     world.register::<core_ecs::sim_interface::HousingBook>()?;
+    world.register::<core_ecs::sim_interface::Skills>()?;
+    world.register::<core_ecs::sim_interface::Relationships>()?;
+    world.register::<core_ecs::sim_interface::Beliefs>()?;
+    world.register::<core_ecs::sim_interface::SchoolAge>()?;
     world.register_event::<fixture::FixtureChurn>()?;
     world.register_event::<fixture::FixtureAlarm>()?;
     world.register_event::<sim_people::PersonDied>()?;
@@ -154,6 +158,9 @@ pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register_event::<core_ecs::sim_interface::HomeSold>()?;
     world.register_event::<core_ecs::sim_interface::HomeBuilt>()?;
     world.register_event::<core_ecs::sim_interface::TaxCollected>()?;
+    world.register_event::<core_ecs::sim_interface::Married>()?;
+    world.register_event::<core_ecs::sim_interface::Born>()?;
+    world.register_event::<core_ecs::sim_interface::SchoolAttended>()?;
     Ok(())
 }
 
@@ -224,7 +231,16 @@ pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
             Rate::Hour,
             Box::new(sim_economy::ProductionSystem::new(econ.clone())),
         );
-        schedule.add_system(Rate::Hour, Box::new(sim_ai::PlanSystem::new(tables)));
+        schedule.add_system(
+            Rate::Hour,
+            Box::new(sim_ai::PlanSystem::new(tables.clone())),
+        );
+        // The social hour (Phase 7, ADR 0010 §§2–3): bonds drift and
+        // gossip spreads wherever leisure gathers people.
+        schedule.add_system(
+            Rate::Hour,
+            Box::new(sim_ai::SocialDriftSystem::new(tables.clone())),
+        );
         let decays = defs
             .people
             .needs
@@ -278,6 +294,32 @@ pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
         schedule.add_system(
             Rate::Day,
             Box::new(sim_goods::SpoilageSystem::new(econ.spoil_per_mille.clone())),
+        );
+        // The Phase 7 lifecycle (ADR 0010 §§2, 4): decay first (absence
+        // erodes), then marriages (thresholds crossed yesterday), then
+        // births — before mortality, so a newborn's first day counts.
+        schedule.add_system(
+            Rate::Day,
+            Box::new(sim_ai::RelationshipDecaySystem::new(
+                defs.social.decay_per_day_per_mille,
+            )),
+        );
+        schedule.add_system(
+            Rate::Day,
+            Box::new(sim_people::MarriageSystem::new(
+                defs.social.marriage_threshold_per_mille,
+                defs.social.edge_cap as usize,
+            )),
+        );
+        schedule.add_system(
+            Rate::Day,
+            Box::new(sim_people::FertilitySystem::new(
+                defs.fertility.clone(),
+                defs.people.clone(),
+                ticks_per_year(defs),
+                defs.skills.skills.len(),
+                defs.social.edge_cap as usize,
+            )),
         );
         schedule.add_system(
             Rate::Day,

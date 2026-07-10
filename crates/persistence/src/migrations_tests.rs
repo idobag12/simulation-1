@@ -8,6 +8,16 @@ fn empty_store() -> Vec<u8> {
     codec::to_bytes(&Vec::<(u32, u8)>::new()).unwrap()
 }
 
+/// Applies a sequence of event-registration extensions (the exact
+/// transformation the migration chain performs).
+fn chain_extensions(original: &[u8], extensions: &[&[&str]]) -> Vec<u8> {
+    let mut bytes = original.to_vec();
+    for names in extensions {
+        bytes = core_events::extend_registration_bytes(&bytes, names).unwrap();
+    }
+    bytes
+}
+
 /// Every component name the chain appends after a v2-era store list.
 fn all_appended() -> Vec<&'static str> {
     V3_ADDED_COMPONENTS
@@ -16,6 +26,7 @@ fn all_appended() -> Vec<&'static str> {
         .chain(V5_ADDED_COMPONENTS.iter())
         .chain(V6_ADDED_COMPONENTS.iter())
         .chain(V7_ADDED_COMPONENTS.iter())
+        .chain(V8_ADDED_COMPONENTS.iter())
         .copied()
         .collect()
 }
@@ -135,6 +146,9 @@ fn v2_bodies_migrate_to_v3_extending_event_registration() {
     money_event!(HomeSoldEv, "econ.home_sold");
     money_event!(HomeBuiltEv, "econ.home_built");
     money_event!(TaxCollectedEv, "econ.tax_collected");
+    money_event!(MarriedEv, "social.married");
+    money_event!(BornEv, "people.born");
+    money_event!(SchoolEv, "people.school_attended");
     grown.restore(&v3.events).unwrap();
     assert_eq!(grown.scheduled_count(), 1);
 }
@@ -237,20 +251,16 @@ fn v2_fixture_content_survives_migration_verbatim() {
         assert!(appended.contains(&name.as_str()));
         assert_eq!(*bytes, empty_store());
     }
-    let expected_events = core_events::extend_registration_bytes(
-        &core_events::extend_registration_bytes(
-            &core_events::extend_registration_bytes(
-                &core_events::extend_registration_bytes(&original_events, &V3_ADDED_EVENTS)
-                    .unwrap(),
-                &V5_ADDED_EVENTS,
-            )
-            .unwrap(),
+    let expected_events = chain_extensions(
+        &original_events,
+        &[
+            &V3_ADDED_EVENTS,
+            &V5_ADDED_EVENTS,
             &V6_ADDED_EVENTS,
-        )
-        .unwrap(),
-        &V7_ADDED_EVENTS,
-    )
-    .unwrap();
+            &V7_ADDED_EVENTS,
+            &V8_ADDED_EVENTS,
+        ],
+    );
     assert_eq!(
         migrated.events, expected_events,
         "events blob must differ by exactly the chained registration extensions"
@@ -287,6 +297,7 @@ fn v3_fixture_content_survives_migration_verbatim() {
         .chain(V5_ADDED_COMPONENTS.iter())
         .chain(V6_ADDED_COMPONENTS.iter())
         .chain(V7_ADDED_COMPONENTS.iter())
+        .chain(V8_ADDED_COMPONENTS.iter())
         .copied()
         .collect();
     assert_eq!(
@@ -299,16 +310,15 @@ fn v3_fixture_content_survives_migration_verbatim() {
     }
     assert_eq!(
         migrated.events,
-        core_events::extend_registration_bytes(
-            &core_events::extend_registration_bytes(
-                &core_events::extend_registration_bytes(&original_events, &V5_ADDED_EVENTS)
-                    .unwrap(),
+        chain_extensions(
+            &original_events,
+            &[
+                &V5_ADDED_EVENTS,
                 &V6_ADDED_EVENTS,
-            )
-            .unwrap(),
-            &V7_ADDED_EVENTS,
-        )
-        .unwrap(),
+                &V7_ADDED_EVENTS,
+                &V8_ADDED_EVENTS
+            ],
+        ),
         "the events blob must differ by exactly the chained registration extensions"
     );
 }
@@ -340,6 +350,7 @@ fn v4_fixture_content_survives_migration_verbatim() {
         .iter()
         .chain(V6_ADDED_COMPONENTS.iter())
         .chain(V7_ADDED_COMPONENTS.iter())
+        .chain(V8_ADDED_COMPONENTS.iter())
         .copied()
         .collect();
     assert_eq!(
@@ -352,16 +363,15 @@ fn v4_fixture_content_survives_migration_verbatim() {
     }
     assert_eq!(
         migrated.events,
-        core_events::extend_registration_bytes(
-            &core_events::extend_registration_bytes(
-                &core_events::extend_registration_bytes(&original_events, &V5_ADDED_EVENTS)
-                    .unwrap(),
+        chain_extensions(
+            &original_events,
+            &[
+                &V5_ADDED_EVENTS,
                 &V6_ADDED_EVENTS,
-            )
-            .unwrap(),
-            &V7_ADDED_EVENTS,
-        )
-        .unwrap(),
+                &V7_ADDED_EVENTS,
+                &V8_ADDED_EVENTS
+            ],
+        ),
         "the events blob must differ by exactly the chained registration extensions"
     );
     assert_ne!(migrated.events, original_events);
@@ -393,6 +403,7 @@ fn v5_fixture_content_survives_migration_verbatim() {
     let appended: Vec<&str> = V6_ADDED_COMPONENTS
         .iter()
         .chain(V7_ADDED_COMPONENTS.iter())
+        .chain(V8_ADDED_COMPONENTS.iter())
         .copied()
         .collect();
     assert_eq!(
@@ -405,11 +416,10 @@ fn v5_fixture_content_survives_migration_verbatim() {
     }
     assert_eq!(
         migrated.events,
-        core_events::extend_registration_bytes(
-            &core_events::extend_registration_bytes(&original_events, &V6_ADDED_EVENTS).unwrap(),
-            &V7_ADDED_EVENTS,
-        )
-        .unwrap(),
+        chain_extensions(
+            &original_events,
+            &[&V6_ADDED_EVENTS, &V7_ADDED_EVENTS, &V8_ADDED_EVENTS],
+        ),
         "the events blob must differ by exactly the v6+v7 registration extensions"
     );
     assert_ne!(migrated.events, original_events);
@@ -438,18 +448,62 @@ fn v6_fixture_content_survives_migration_verbatim() {
         &migrated.components[..original_components.len()],
         &original_components
     );
+    let appended: Vec<&str> = V7_ADDED_COMPONENTS
+        .iter()
+        .chain(V8_ADDED_COMPONENTS.iter())
+        .copied()
+        .collect();
     assert_eq!(
         migrated.components.len(),
-        original_components.len() + V7_ADDED_COMPONENTS.len()
+        original_components.len() + appended.len()
     );
     for (name, bytes) in &migrated.components[original_components.len()..] {
-        assert!(V7_ADDED_COMPONENTS.contains(&name.as_str()));
+        assert!(appended.contains(&name.as_str()));
         assert_eq!(*bytes, empty_store());
     }
     assert_eq!(
         migrated.events,
-        core_events::extend_registration_bytes(&original_events, &V7_ADDED_EVENTS).unwrap(),
+        chain_extensions(&original_events, &[&V7_ADDED_EVENTS, &V8_ADDED_EVENTS]),
         "the events blob must differ by exactly the v7 registration extension"
+    );
+    assert_ne!(migrated.events, original_events);
+}
+
+/// ADR 0004 §10 content-continuity proof for the committed Phase 6
+/// fixture: v7→v8 passes every field through verbatim except the four
+/// appended (empty) social stores; the events blob differs by exactly
+/// the v8 name-list extension.
+#[test]
+fn v7_fixture_content_survives_migration_verbatim() {
+    const V7_FIXTURE: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/v7_seed41_fixture30_citizens250_tick29360.embersave"
+    ));
+    let payload = &V7_FIXTURE[crate::MAGIC.len() + 4..];
+    let raw = zstd::stream::decode_all(payload).expect("fixture decompresses");
+    let v7: SaveBodyV7 = codec::from_bytes(&raw).expect("fixture decodes as v7");
+    let original_events = v7.events.clone();
+    let original_components = v7.components.clone();
+
+    let migrated = migrate_to_current(7, raw).expect("migration");
+    assert_eq!(migrated.seed, Seed::new(41));
+    assert_eq!(migrated.tick, Ticks::new(29360));
+    assert_eq!(
+        &migrated.components[..original_components.len()],
+        &original_components
+    );
+    assert_eq!(
+        migrated.components.len(),
+        original_components.len() + V8_ADDED_COMPONENTS.len()
+    );
+    for (name, bytes) in &migrated.components[original_components.len()..] {
+        assert!(V8_ADDED_COMPONENTS.contains(&name.as_str()));
+        assert_eq!(*bytes, empty_store());
+    }
+    assert_eq!(
+        migrated.events,
+        chain_extensions(&original_events, &[&V8_ADDED_EVENTS]),
+        "the events blob must differ by exactly the v8 registration extension"
     );
     assert_ne!(migrated.events, original_events);
 }

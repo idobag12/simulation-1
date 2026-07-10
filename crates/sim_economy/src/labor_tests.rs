@@ -211,23 +211,23 @@ fn reservation_wages_rise_with_wealth_and_fall_with_industriousness() {
     // ADR 0008 §3's ask formula, term by term (base 150, wealth 300‰
     // saturating at half-wealth 20k, trait discount 400‰).
     let market = crate::LaborMarketSystem::new(tables());
-    let broke_lazy = market.reservation(0, 0).expect("ask");
+    let broke_lazy = market.reservation(0, 0, 0).expect("ask");
     assert_eq!(broke_lazy, 150, "base only");
-    let rich_lazy = market.reservation(20_000, 0).expect("ask");
+    let rich_lazy = market.reservation(20_000, 0, 0).expect("ask");
     assert_eq!(rich_lazy, 150 + 22, "half-wealth adds half the 45-mill cap");
-    let richest_lazy = market.reservation(i64::MAX / 2_000_000, 0).expect("ask");
+    let richest_lazy = market.reservation(i64::MAX / 2_000_000, 0, 0).expect("ask");
     assert!(
         (150 + 40..=150 + 45).contains(&richest_lazy),
         "the wealth raise saturates near +45, got {richest_lazy}"
     );
-    let broke_industrious = market.reservation(0, 1000).expect("ask");
+    let broke_industrious = market.reservation(0, 1000, 0).expect("ask");
     assert_eq!(
         broke_industrious,
         150 - 60,
         "full trait discounts 400‰ of base"
     );
     assert!(
-        market.reservation(20_000, 1000).expect("ask") < rich_lazy,
+        market.reservation(20_000, 1000, 0).expect("ask") < rich_lazy,
         "industriousness undercuts an equally wealthy twin"
     );
 }

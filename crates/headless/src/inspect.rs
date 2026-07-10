@@ -236,6 +236,14 @@ fn activity_report(world: &World, defs: &DataDefs, entity: Entity) -> Result<Str
                 "doing: working at {} ({remaining} ticks left in the stint)\n",
                 location_label(world, defs, *at)?,
             ),
+            sim_ai::CurrentAction::SchoolTravel { target, remaining } => format!(
+                "doing: heading to {} for school ({remaining} ticks left)\n",
+                location_label(world, defs, *target)?,
+            ),
+            sim_ai::CurrentAction::Attend { at, remaining } => format!(
+                "doing: attending school at {} ({remaining} ticks left)\n",
+                location_label(world, defs, *at)?,
+            ),
         };
         out.push_str(&line);
     }
@@ -271,6 +279,9 @@ fn activity_report(world: &World, defs: &DataDefs, entity: Entity) -> Result<Str
                 ),
                 sim_ai::CandidateAction::Work { location } => {
                     format!("work at {}", location_label(world, defs, location)?)
+                }
+                sim_ai::CandidateAction::AttendSchool { location } => {
+                    format!("school at {}", location_label(world, defs, location)?)
                 }
             };
             out.push_str(&format!(
