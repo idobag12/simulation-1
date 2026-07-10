@@ -47,6 +47,11 @@ the weakest non-kin edge evicts on overflow). `Edge { other: Entity,
 kind: RelKind, strength_per_mille: i32 }`; `RelKind { Kin, Spouse,
 Friend, Romance }` — professional/rivalry edges are later texture
 (deferral documented; nothing in the exit criteria needs them).
+**Amended:** the cap bounds DRIFT edges only — Kin and Spouse edges are
+privileged and always record (evicting the weakest drift edge, or
+exceeding the cap when only family remains): a silently dropped kin or
+spouse edge makes the graph one-sided, defeating the incest screen and
+the bigamy check and locking widows to corpses.
 
 - **Kinship** is written by facts, never decayed: parent/child edges at
   birth, spouse edges at marriage, sibling edges between a newborn and
@@ -84,14 +89,19 @@ cap): the believed unit price of each retail shop, updated exactly by
 Beliefs bite in purchase scoring: the shop-choice money cost uses the
 BELIEVED price when one exists (falling back to the posted price);
 citizens discover real prices at the till (the belief then corrects —
-being wrong is honest and self-healing).
+being wrong is honest and self-healing). **Amended:** at the cap,
+experience ALWAYS lands (the most-expensive believed shop is forgotten
+first — bargains are worth remembering, and the forgotten shop falls
+back to its posted price); only hearsay is dropped at the cap.
 
 ## 4. Courtship, marriage, reproduction
 
 - **Courtship**: the romance drift above; a `court` goal is implicit in
   the edge (no separate goal object — YAGNI).
 - **Marriage** (day-rate, deterministic): a Romance edge crossing the
-  data threshold with BOTH parties single adults marries them: spouse
+  data threshold with BOTH parties single non-kin adults marries them
+  (**amended:** the kin bar is checked here too, both sides — defense
+  in depth behind the drift screen): spouse
   edges, `Married` event, and a NEW household of exactly the couple
   (**amended in-phase:** the originally designed merge COMPOUNDED —
   every wedding unioned two extended families into one ever-growing
@@ -100,11 +110,19 @@ being wrong is honest and self-healing).
   registers; a partner's own home houses the couple, a homeless pair
   of nest-leavers starts under the in-laws' roof (their own register,
   the multi-generation HOME), and the vacated tenancy releases to the
-  market.
+  market. **Amended:** the wedding clears EVERY Romance edge touching
+  either newlywed — their own old flames and third parties' edges
+  toward them (fidelity resets courtship; otherwise a stale
+  above-threshold flame remarries a widow the day after the funeral —
+  widows love again by NEW courtship).
 - **Reproduction** (day-rate): married couples sharing a residence
   face a data fertility-per-day chance (age-banded, from
   `data/balance/fertility.ron`, drawn on the `people.fertility`
-  stream), capped by data household size. A birth spawns a child:
+  stream), capped by data household size (**amended:** the cap counts
+  the household members UNDER THE MOTHER'S ROOF — nest-left adult
+  children keep their register entry but not the bedroom, and must
+  not sterilize their parents; validation requires the cap ≥ 3, since
+  the couple itself counts). A birth spawns a child:
   heritable traits = per-trait midpoint of the parents ± mutation
   (data per-mille range, same stream), age 0, joins the household and
   home, kinship edges written, `Born` event. Children age by the
@@ -135,7 +153,13 @@ FORMAT_VERSION 8, mechanical v7→v8 chained from v1, continuity proofs,
 goldens re-recorded with reasons, new v8 fixture, pinned snapshot
 `data_v8`. Migrated towns: no skills, no edges, no beliefs — every new
 system no-ops over empty stores and builds state from lived events
-(the catch-up lesson); nothing is invented.
+(the catch-up lesson); nothing is invented. That includes the SCHOOL:
+`Location.kind` is a persisted index, so the school kind is APPENDED
+at the END of `locations.ron` (pre-v8 town halls keep their kind), and
+migration spawns no school building — a migrated town's children
+cannot attend until some future phase builds one (documented decision;
+learning-by-doing still teaches them, and the guard is asserted by the
+v7 save-compat suite).
 
 ## 7. Data
 
@@ -161,9 +185,14 @@ fertility bands ordered, mutation ≤ 1000.
   kinship NETWORK, counted from the graph.
 - *…and skill mobility*: in the same run, assert children of
   low-skill parents reach skill levels their parents never held (via
-  school), and that wages for the skilled measurably exceed the
-  unskilled at the same firm kind — mobility in both the skill and the
-  wage sense, measured, never assigned.
+  school) — mobility in the skill sense, measured in the run.
+  **Amended:** the WAGE sense is proven at the unit level instead (a
+  master's reservation clears above a novice's, the exact premium the
+  labor market prices): a run-level wage comparison confounds the wage
+  AT HIRE with the skill NOW — a worker hired young at a low wage may
+  be the town's most skilled by the measurement day, so measured run
+  wages do not cleanly order by current skill even when the mechanism
+  is correct.
 - *Narrative composer surfaces coherent story lines from real event
   chains*: seed a run whose events provably contain a chain (marriage
   after courtship, birth after marriage — from the generation run) and

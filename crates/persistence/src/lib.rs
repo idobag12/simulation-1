@@ -41,6 +41,7 @@ use thiserror::Error;
 /// v5 = Phase 4 (+ economy registrations and events, ADR 0007 §9);
 /// v6 = Phase 5 (+ labor registrations and events, ADR 0008 §8);
 /// v7 = Phase 6 (+ money registrations and events, ADR 0009 §6).
+/// - v8 = Phase 7 (+ social registrations and events, ADR 0010 §6).
 pub const FORMAT_VERSION: u32 = 8;
 
 /// 8-byte file magic identifying an Embervale save.
@@ -84,7 +85,7 @@ pub enum PersistError {
     Ecs(#[from] EcsError),
 }
 
-/// The full serialized world state (SPEC §9), current format (v7).
+/// The full serialized world state (SPEC §9), current format (v8).
 /// Everything a running simulation is, minus the schedule and calendar,
 /// which the application reconstructs exactly as it reconstructs
 /// registrations.

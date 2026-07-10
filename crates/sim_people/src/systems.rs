@@ -272,24 +272,58 @@ fn settle_death(w: &mut World, entity: Entity, household: Option<Entity>) -> Res
             w.despawn(household)?;
         }
     }
-    // Widowhood is real (ADR 0010 §4): the survivor's SPOUSE edge to
-    // the deceased is removed (they may love and marry again); kin
-    // edges remain — the dead stay family.
-    if let Some(relationships) = w
-        .get::<core_ecs::sim_interface::Relationships>(entity)?
-        .cloned()
-    {
-        for edge in &relationships.edges {
-            if matches!(edge.kind, core_ecs::sim_interface::RelKind::Spouse)
-                && w.is_alive(edge.other)
-                && let Some(other_rel) =
-                    w.get_mut::<core_ecs::sim_interface::Relationships>(edge.other)?
-            {
-                other_rel.edges.retain(|e| {
-                    !(e.other == entity
-                        && matches!(e.kind, core_ecs::sim_interface::RelKind::Spouse))
-                });
+    // The roof survives the tenant (Phase 7 review): a dead tenant's
+    // Tenancy passes to a co-resident with a wallet (the rent obligation
+    // continues with the home), else every co-resident's Residence ends
+    // — the home returns to the market instead of sheltering squatters
+    // the rent system cannot see.
+    if let Some(tenancy) = w.get::<core_ecs::sim_interface::Tenancy>(entity)?.copied() {
+        let co_residents: Vec<Entity> = w
+            .iter::<core_ecs::sim_interface::Residence>()?
+            .filter(|(other, residence)| *other != entity && residence.home == tenancy.home)
+            .map(|(other, _)| other)
+            .collect();
+        let heir_tenant = co_residents
+            .iter()
+            .copied()
+            .find(|other| matches!(w.get::<Wallet>(*other), Ok(Some(_))));
+        match heir_tenant {
+            Some(successor) => {
+                w.insert(successor, tenancy)?;
             }
+            None => {
+                for other in co_residents {
+                    w.remove::<core_ecs::sim_interface::Residence>(other)?;
+                }
+            }
+        }
+        w.remove::<core_ecs::sim_interface::Tenancy>(entity)?;
+    }
+
+    // Widowhood is real (ADR 0010 §4): every survivor's SPOUSE edge to
+    // the deceased is removed (they may love and marry again); kin
+    // edges remain — the dead stay family. The sweep scans the
+    // SURVIVORS' lists, not the deceased's — a widow must never stay
+    // locked to a corpse because one side's list was imperfect.
+    let widowed: Vec<Entity> = w
+        .iter::<core_ecs::sim_interface::Relationships>()?
+        .filter(|(other, relationships)| {
+            *other != entity
+                && relationships.edges.iter().any(|edge| {
+                    edge.other == entity
+                        && matches!(edge.kind, core_ecs::sim_interface::RelKind::Spouse)
+                })
+        })
+        .map(|(other, _)| other)
+        .collect();
+    for survivor in widowed {
+        if let Some(relationships) =
+            w.get_mut::<core_ecs::sim_interface::Relationships>(survivor)?
+        {
+            relationships.edges.retain(|edge| {
+                !(edge.other == entity
+                    && matches!(edge.kind, core_ecs::sim_interface::RelKind::Spouse))
+            });
         }
     }
 
@@ -515,6 +549,12 @@ mod tests {
         world
             .register::<core_ecs::sim_interface::Relationships>()
             .expect("register");
+        world
+            .register::<core_ecs::sim_interface::Tenancy>()
+            .expect("register");
+        world
+            .register::<core_ecs::sim_interface::Residence>()
+            .expect("register");
 
         let bank = world.spawn();
         let deceased = world.spawn();
@@ -643,6 +683,121 @@ mod tests {
                 .cash,
             Money::ZERO,
             "the debt consumed the liquid estate — the heir gets no cash"
+        );
+    }
+
+    /// ADR 0010 §4: widowhood clears the SURVIVOR's spouse edge (scanned
+    /// from the survivors' side — a one-sided list must never lock a
+    /// widow to a corpse) while kin edges remain, and the widow may then
+    /// remarry by new courtship.
+    #[test]
+    fn widows_lose_the_spouse_edge_keep_kin_and_may_remarry() {
+        use core_ecs::sim_interface::{
+            BankBook, EconCounters, Married, RelKind, Relationships, TreasuryBook, Wallet,
+        };
+        use core_types::{CalendarTime, Ticks};
+
+        let mut world = World::new(Seed::new(5), 32);
+        world.register::<Identity>().expect("register");
+        world.register::<Household>().expect("register");
+        world.register::<HouseholdMember>().expect("register");
+        world.register::<Relationships>().expect("register");
+        world
+            .register::<core_ecs::sim_interface::Residence>()
+            .expect("register");
+        world
+            .register::<core_ecs::sim_interface::Tenancy>()
+            .expect("register");
+        world.register::<WorkingAge>().expect("register");
+        world.register::<Wallet>().expect("register");
+        world.register::<BankBook>().expect("register");
+        world.register::<Ownership>().expect("register");
+        world.register::<TreasuryBook>().expect("register");
+        world.register::<EconCounters>().expect("register");
+        world.register_event::<Married>().expect("register");
+        world
+            .register_event::<core_ecs::sim_interface::LoanDefaulted>()
+            .expect("register");
+
+        let widow = world.spawn();
+        let deceased = world.spawn();
+        let child = world.spawn();
+        let suitor = world.spawn();
+        for entity in [widow, deceased, child, suitor] {
+            world
+                .insert(
+                    entity,
+                    Identity {
+                        given_name: "N".into(),
+                        family_name: "Test".into(),
+                        sex: Sex::Female,
+                        birth_tick: 0,
+                    },
+                )
+                .expect("insert");
+        }
+        world.insert(widow, WorkingAge).expect("insert");
+        world.insert(suitor, WorkingAge).expect("insert");
+        const CAP: usize = 12;
+        // The marriage, WITH the deceased's side deliberately imperfect:
+        // only the widow's list carries the spouse edge — the sweep must
+        // still find her.
+        let mut rel = Relationships::default();
+        rel.upsert(deceased, RelKind::Spouse, 1000, CAP);
+        rel.upsert(child, RelKind::Kin, 1000, CAP);
+        world.insert(widow, rel).expect("insert");
+        let household = world.spawn();
+        world
+            .insert(
+                household,
+                Household {
+                    members: vec![widow, deceased],
+                },
+            )
+            .expect("insert");
+
+        settle_death(&mut world, deceased, Some(household)).expect("settle");
+        let rel = world
+            .get::<Relationships>(widow)
+            .expect("query")
+            .expect("edges")
+            .clone();
+        assert_eq!(
+            rel.strength(deceased, RelKind::Spouse),
+            None,
+            "the spouse edge died with the spouse"
+        );
+        assert_eq!(
+            rel.strength(child, RelKind::Kin),
+            Some(1000),
+            "the dead stay family — kin edges remain"
+        );
+
+        // New courtship crosses the threshold: the widow remarries.
+        for (this, other) in [(widow, suitor), (suitor, widow)] {
+            let mut rel = world
+                .get::<Relationships>(this)
+                .expect("query")
+                .cloned()
+                .unwrap_or_default();
+            rel.upsert(other, RelKind::Romance, 800, CAP);
+            world.insert(this, rel).expect("insert");
+        }
+        let ctx = TickContext {
+            tick: Ticks::new(0),
+            time: CalendarTime::START,
+        };
+        crate::systems_social::MarriageSystem::new(700, CAP)
+            .run(&mut world, &ctx, &mut CommandBuffer::new())
+            .expect("run");
+        assert_eq!(
+            world
+                .get::<Relationships>(widow)
+                .expect("query")
+                .expect("edges")
+                .strength(suitor, RelKind::Spouse),
+            Some(1000),
+            "widows love again — by new courtship"
         );
     }
 }

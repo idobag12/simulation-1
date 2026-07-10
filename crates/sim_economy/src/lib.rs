@@ -25,6 +25,7 @@ pub mod genesis;
 pub mod housing;
 pub mod housing_market;
 pub mod labor;
+pub mod payroll;
 pub mod systems;
 mod transact;
 mod vault;
@@ -38,5 +39,6 @@ pub use config::{
 pub use config_money::{BankConfig, HousingConfig, MoneyTables, TaxesConfig};
 pub use housing::{RentSystem, RentalMarketSystem};
 pub use housing_market::PurchaseMarketSystem;
-pub use labor::{LaborMarketSystem, PayrollSystem};
+pub use labor::LaborMarketSystem;
+pub use payroll::PayrollSystem;
 pub use systems::{PricingSystem, ProductionSystem, TradeSystem};

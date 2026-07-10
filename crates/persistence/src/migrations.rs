@@ -220,6 +220,8 @@ fn v6_to_v7(mut v6: SaveBodyV6) -> Result<SaveBody, PersistError> {
     Ok(v6)
 }
 
+/// Format v7 body, FROZEN. Structurally identical to v8 — v7→v8 only
+/// appends registrations — so the alias documents the version boundary.
 type SaveBodyV7 = SaveBody;
 
 // Registration growth from v7 to v8 (Phase 7, ADR 0010 §6). Historical

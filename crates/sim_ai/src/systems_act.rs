@@ -314,6 +314,9 @@ impl System for ActSystem {
                         .unwrap_or(core_ecs::sim_interface::Skills {
                             levels: vec![0; self.tables.skill_count as usize],
                         });
+                    if skills.levels.len() < self.tables.skill_count as usize {
+                        skills.levels.resize(self.tables.skill_count as usize, 0);
+                    }
                     if let Some(level) = skills.levels.get_mut(skill) {
                         *level = level.saturating_add(gain).min(1000);
                     }

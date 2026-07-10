@@ -207,3 +207,149 @@ fn the_composer_reads_chains_from_the_event_log() {
         "{filtered:?}"
     );
 }
+
+/// The composer's remaining chain patterns, deterministically: job loss
+/// → new work, and default → renting again — including the sad-path
+/// variants — and the remarriage attribution rule (a child binds to the
+/// marriage whose FULL couple matches).
+#[test]
+fn the_composer_reads_labor_money_and_remarriage_chains() {
+    use core_ecs::sim_interface::{
+        Born, Fired, FiredReason, Hired, LoanDefaulted, Married, TenancyStarted,
+    };
+    use core_types::{Money, Ticks};
+    use sim_people::Sex;
+
+    let mut world = core_ecs::World::new(Seed::new(6), 64);
+    world.register::<Identity>().expect("register");
+    world.register_event::<Married>().expect("register");
+    world.register_event::<Born>().expect("register");
+    world.register_event::<Fired>().expect("register");
+    world.register_event::<Hired>().expect("register");
+    world.register_event::<LoanDefaulted>().expect("register");
+    world.register_event::<TenancyStarted>().expect("register");
+
+    let dana = world.spawn();
+    let eli = world.spawn();
+    let fern = world.spawn();
+    let kid = world.spawn();
+    let firm = world.spawn();
+    let home = world.spawn();
+    for (entity, name, sex) in [
+        (dana, "Dana", Sex::Female),
+        (eli, "Eli", Sex::Male),
+        (fern, "Fern", Sex::Female),
+        (kid, "Kit", Sex::Male),
+    ] {
+        world
+            .insert(
+                entity,
+                Identity {
+                    given_name: name.to_owned(),
+                    family_name: "Vale".to_owned(),
+                    sex,
+                    birth_tick: 0,
+                },
+            )
+            .expect("insert");
+    }
+    let day = |d: u64| Ticks::new(d * 1440);
+
+    // Labor chain: fired day 2, rehired day 5.
+    world.begin_tick(day(2));
+    world
+        .emit(&Fired {
+            citizen: dana,
+            employer: firm,
+            reason: FiredReason::Insolvent,
+        })
+        .expect("emit");
+    world.begin_tick(Ticks::new(2 * 1440 + 1));
+    world.begin_tick(day(5));
+    world
+        .emit(&Hired {
+            citizen: dana,
+            employer: firm,
+            wage_per_day: Money::from_mills(200),
+        })
+        .expect("emit");
+    world.begin_tick(Ticks::new(5 * 1440 + 1));
+    // Money chain: eli defaults day 6, rents again day 9.
+    world.begin_tick(day(6));
+    world
+        .emit(&LoanDefaulted {
+            borrower: eli,
+            written_off: Money::from_mills(500),
+        })
+        .expect("emit");
+    world.begin_tick(Ticks::new(6 * 1440 + 1));
+    world.begin_tick(day(9));
+    world
+        .emit(&TenancyStarted {
+            tenant: eli,
+            home,
+            rent_per_day: Money::from_mills(60),
+        })
+        .expect("emit");
+    world.begin_tick(Ticks::new(9 * 1440 + 1));
+    // Remarriage attribution: Dana marries Eli (day 10); Eli dies
+    // (implicitly); Dana remarries Fern is same-sex — use male Kit's
+    // parents instead: Dana+Eli married day 10; Dana+Fern married day
+    // 12 (the widow remarried); the child born day 14 to (Fern, Dana)
+    // must attach to the SECOND marriage's line only.
+    world.begin_tick(day(10));
+    world
+        .emit(&Married {
+            partner_a: dana,
+            partner_b: eli,
+        })
+        .expect("emit");
+    world.begin_tick(Ticks::new(10 * 1440 + 1));
+    world.begin_tick(day(12));
+    world
+        .emit(&Married {
+            partner_a: dana,
+            partner_b: fern,
+        })
+        .expect("emit");
+    world.begin_tick(Ticks::new(12 * 1440 + 1));
+    world.begin_tick(day(14));
+    world
+        .emit(&Born {
+            child: kid,
+            parent_a: dana,
+            parent_b: fern,
+        })
+        .expect("emit");
+    world.begin_tick(Ticks::new(14 * 1440 + 1));
+
+    let lines = debug_tools::stories(&world, None).expect("compose");
+    assert!(
+        lines.iter().any(|line| line.contains("Dana Vale")
+            && line.contains("lost their job on day 2")
+            && line.contains("found new work by day 5")),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("Eli Vale")
+            && line.contains("defaulted on day 6")
+            && line.contains("renting again by day 9")),
+        "{lines:?}"
+    );
+    let first_marriage = lines
+        .iter()
+        .find(|line| line.contains("married on day 10"))
+        .expect("first marriage line");
+    assert!(
+        !first_marriage.contains("Kit Vale"),
+        "the child must NOT attach to the earlier marriage: {first_marriage}"
+    );
+    let second_marriage = lines
+        .iter()
+        .find(|line| line.contains("married on day 12"))
+        .expect("second marriage line");
+    assert!(
+        second_marriage.contains("Kit Vale") && second_marriage.contains("born on day 14"),
+        "the child attaches to the marriage whose couple matches: {second_marriage}"
+    );
+}

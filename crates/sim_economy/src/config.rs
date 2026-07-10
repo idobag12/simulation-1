@@ -248,4 +248,6 @@ pub struct EconTables {
     pub public_skill: u32,
     /// Per-mille mastery gained per paid day (learning by doing).
     pub doing_gain_per_shift_per_mille: u16,
+    /// Total skills in data order (lazy `Skills` rows take this shape).
+    pub skill_count: u32,
 }

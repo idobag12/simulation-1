@@ -100,15 +100,23 @@ pub fn stories(world: &World, subject: Option<u32>) -> Result<Vec<String>, EcsEr
                     name_of(world, *who),
                     name_of(world, *partner)
                 );
-                let child = timelines[position..]
-                    .iter()
-                    .find_map(|(_, d2, later)| match later {
-                        Happening::Born {
-                            child,
-                            other_parent,
-                        } if other_parent == partner || other_parent == who => Some((*child, *d2)),
-                        _ => None,
-                    });
+                let child =
+                    timelines[position..]
+                        .iter()
+                        .find_map(|(subject, d2, later)| match later {
+                            // The FULL couple must match — a widowed-and-
+                            // remarried citizen's later children belong to
+                            // the later marriage's line.
+                            Happening::Born {
+                                child,
+                                other_parent,
+                            } if (subject == who && other_parent == partner)
+                                || (subject == partner && other_parent == who) =>
+                            {
+                                Some((*child, *d2))
+                            }
+                            _ => None,
+                        });
                 if let Some((child, born_day)) = child {
                     line.push_str(&format!(
                         "; their child {} was born on day {born_day}",

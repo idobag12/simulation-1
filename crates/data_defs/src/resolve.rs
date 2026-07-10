@@ -239,6 +239,7 @@ pub fn resolve_economy(defs: &DataDefs) -> sim_economy::EconTables {
         },
         labor_skill_weight_per_mille: defs.skills.labor_skill_weight_per_mille,
         doing_gain_per_shift_per_mille: defs.skills.doing_gain_per_shift_per_mille,
+        skill_count: defs.skills.skills.len() as u32,
         public_skill: defs
             .skills
             .skills

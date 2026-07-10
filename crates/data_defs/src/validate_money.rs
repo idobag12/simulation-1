@@ -262,7 +262,10 @@ pub(crate) fn validate_money(
 
 /// Phase 7 social-layer validation (ADR 0010 §7): skills/school,
 /// the social graph, and fertility.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "cross-file id resolution needs each config; a params struct would only rename the locals"
+)]
 pub(crate) fn validate_social(
     data_root: &Path,
     skills: &sim_people::config::SkillsConfig,
@@ -451,10 +454,12 @@ pub(crate) fn validate_social(
         }
         last_max = Some(band.max_age_years);
     }
-    if fertility.max_household_size < 2 {
+    if fertility.max_household_size < 3 {
         return Err(e(
             f,
-            "max_household_size must be >= 2 (a couple lives there)".into(),
+            "max_household_size must be >= 3 (the cap counts the couple \
+             under the roof; 2 silently forbids every birth)"
+                .into(),
         ));
     }
     if fertility.trait_mutation_per_mille > 1000 {

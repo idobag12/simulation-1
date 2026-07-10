@@ -43,8 +43,8 @@ fn fixture_schedule() -> core_ecs::Schedule {
 /// Committed v1 fixture: seed 7, 50 fixture entities, 1,000 ticks (Phase 0).
 const V1_FIXTURE: &[u8] = include_bytes!("../fixtures/v1_seed7_fixture50_tick1000.embersave");
 
-/// Golden hash of the migrated v1 fixture at load (re-recorded Phase 6:
-/// registration grew, ADR 0009 §6).
+/// Golden hash of the migrated v1 fixture at load (re-recorded Phase 7:
+/// registration grew to v8, pinned snapshot data_v8 — ADR 0010 §6).
 const V1_GOLDEN_HASH_AT_LOAD: u64 = 0xdfa2_e71d_cea9_f1c4;
 
 /// Golden hash after resuming the migrated v1 world 100 ticks.
@@ -88,7 +88,7 @@ fn v1_golden_save_resumes_deterministically() {
 /// scheduled alarms.
 const V2_FIXTURE: &[u8] = include_bytes!("../fixtures/v2_seed13_fixture60_tick2000.embersave");
 
-/// Golden hash of the migrated v2 fixture at load (re-recorded Phase 6).
+/// Golden hash of the migrated v2 fixture at load (re-recorded Phase 7: registration grew to v8).
 const V2_GOLDEN_HASH_AT_LOAD: u64 = 0xa39c_7766_3a99_a81d;
 
 /// Golden hash after resuming the migrated v2 fixture 100 ticks.
@@ -132,7 +132,7 @@ fn v2_golden_save_resumes_deterministically() {
 const V3_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v3_seed17_fixture40_citizens300_tick3000.embersave");
 
-/// Golden hash of the migrated v3 fixture at load (re-recorded Phase 6).
+/// Golden hash of the migrated v3 fixture at load (re-recorded Phase 7: registration grew to v8).
 const V3_GOLDEN_HASH_AT_LOAD: u64 = 0x66ff_2c05_7df1_d604;
 
 /// Golden hash after resuming the migrated v3 fixture 1,500 ticks
@@ -184,14 +184,17 @@ fn v3_golden_save_resumes_deterministically() {
 const V4_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v4_seed23_fixture30_citizens250_tick2500.embersave");
 
-/// Golden hash of the v4 fixture at load (re-recorded Phase 6).
+/// Golden hash of the v4 fixture at load (re-recorded Phase 7: registration grew to v8).
 const V4_GOLDEN_HASH_AT_LOAD: u64 = 0x00c9_79e4_3edf_9a3d;
 
 /// Golden hash after resuming the v4 fixture 700 ticks (mid-flight
 /// actions complete, new decisions land, needs decay and satisfy — under
 /// the v5 data snapshot, whose satisfiers changed; a migrated pre-economy
 /// town has no wallets or shops, so nobody buys anything, honestly).
-const V4_GOLDEN_HASH_AFTER_700: u64 = 0x18fa_6870_c03c_b8d0;
+/// Re-recorded with the Phase 7 review fixes: migrated citizens GROW a
+/// social graph as they meet (lived events, nothing invented), so the
+/// drift-dedup and marriage-fidelity fixes move the resume trajectory.
+const V4_GOLDEN_HASH_AFTER_700: u64 = 0x91f7_3e76_ffbf_b6dc;
 
 #[test]
 fn v4_golden_save_loads_to_the_exact_golden_state() {
@@ -240,7 +243,7 @@ fn v4_golden_save_resumes_deterministically() {
 const V5_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v5_seed29_fixture30_citizens250_tick2600.embersave");
 
-/// Golden hash of the v5 fixture at load (re-recorded Phase 6; the
+/// Golden hash of the v5 fixture at load (re-recorded Phase 7; the
 /// migrated v5 town has no working-age markers or labor stats until its
 /// first day boundary — nobody is hired out of thin air; the promotion
 /// stamps real adults, the ledger grows its stats row, and the market
@@ -249,8 +252,9 @@ const V5_FIXTURE: &[u8] =
 const V5_GOLDEN_HASH_AT_LOAD: u64 = 0x6e5c_4473_30d2_d264;
 
 /// Golden hash after resuming the v5 fixture 700 ticks (purchases,
-/// trades, repricing, and the daily audit all run again).
-const V5_GOLDEN_HASH_AFTER_700: u64 = 0xc46c_ce3d_5108_8aaf;
+/// trades, repricing, and the daily audit all run again). Re-recorded
+/// with the Phase 7 review fixes (see the v4 resume note).
+const V5_GOLDEN_HASH_AFTER_700: u64 = 0x9488_849a_044e_c580;
 
 #[test]
 fn v5_golden_save_loads_to_the_exact_golden_state() {
@@ -376,15 +380,16 @@ fn v5_golden_save_resumes_deterministically() {
 const V6_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v6_seed37_fixture30_citizens250_tick2000.embersave");
 
-/// Golden hash of the v6 fixture at load (re-recorded Phase 6:
-/// registration grew, ADR 0009 §6).
+/// Golden hash of the v6 fixture at load (re-recorded Phase 7:
+/// registration grew to v8, pinned snapshot data_v8 — ADR 0010 §6).
 const V6_GOLDEN_HASH_AT_LOAD: u64 = 0xef85_afde_9e1e_f155;
 
 /// Golden hash after resuming the v6 fixture 1,000 ticks (the rest of
 /// the shift, then the 2,880 day boundary's audit/payroll/clearing —
 /// under the Phase 6 day schedule the money systems also run; a
 /// migrated town has no bank or treasury, so they no-op, honestly).
-const V6_GOLDEN_HASH_AFTER_1000: u64 = 0xf3a8_1b19_8ed7_bba6;
+/// Re-recorded with the Phase 7 review fixes (see the v4 resume note).
+const V6_GOLDEN_HASH_AFTER_1000: u64 = 0x8211_8b7c_dffe_1dcd;
 
 #[test]
 fn v6_golden_save_loads_to_the_exact_golden_state() {
@@ -466,8 +471,9 @@ const V7_GOLDEN_HASH_AT_LOAD: u64 = 0x0f9b_7ae7_60b0_419d;
 
 /// Golden hash after resuming the v7 fixture 1,000 ticks (the rest of
 /// the shift, then the day boundary's audit, bank service/origination,
-/// payroll withholding, clearings, and markets).
-const V7_GOLDEN_HASH_AFTER_1000: u64 = 0x96f2_37a1_8b21_f2ba;
+/// payroll withholding, clearings, and markets). Re-recorded with the
+/// Phase 7 review fixes (see the v4 resume note).
+const V7_GOLDEN_HASH_AFTER_1000: u64 = 0xac16_36ca_6709_88f1;
 
 #[test]
 fn v7_golden_save_loads_to_the_exact_golden_state() {
@@ -538,6 +544,41 @@ fn v7_golden_save_loads_to_the_exact_golden_state() {
         })
         .count();
     assert!(working > 0, "the v7 fixture is saved mid-shift");
+    // `Location.kind` is a PERSISTED index into the data-order kind list
+    // (SPEC §8: the list only grows at the end). A migrated v7 town's
+    // town hall and builder yard must still resolve to their own kinds —
+    // and no school may appear from thin air (Phase 7 appended the kind;
+    // migrated worlds are schoolless by decision, ADR 0010 §6).
+    let kind_index = |id: &str| {
+        pinned_defs()
+            .locations
+            .kinds
+            .iter()
+            .position(|kind| kind.id == id)
+            .expect("kind id resolves") as u32
+    };
+    let kind_count = |index: u32| {
+        world
+            .iter::<core_ecs::sim_interface::Location>()
+            .expect("query")
+            .filter(|(_, location)| location.kind == index)
+            .count()
+    };
+    assert_eq!(
+        kind_count(kind_index("town_hall")),
+        1,
+        "the migrated town hall keeps its kind"
+    );
+    assert_eq!(
+        kind_count(kind_index("builder_yard")),
+        1,
+        "the migrated builder yard keeps its kind"
+    );
+    assert_eq!(
+        kind_count(kind_index("school")),
+        0,
+        "migration invents no school building"
+    );
     assert!(
         debug_tools::audit_economy(world).expect("audit"),
         "the loaded fixture must satisfy every conservation identity,
@@ -611,13 +652,14 @@ fn v7_golden_save_resumes_deterministically() {
 const V8_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v8_seed43_fixture30_citizens250_tick29360.embersave");
 
-/// Golden hash of the v8 fixture at load.
-const V8_GOLDEN_HASH_AT_LOAD: u64 = 0xb9f3_a575_5674_74eb;
+/// Golden hash of the v8 fixture at load (fixture regenerated with the
+/// Phase 7 review fixes — the format itself is unchanged).
+const V8_GOLDEN_HASH_AT_LOAD: u64 = 0x64e5_e155_b5e4_7ae5;
 
 /// Golden hash after resuming the v8 fixture 1,000 ticks (the social
 /// hour drifts bonds, then the day boundary's decay/marriage/fertility
 /// pass runs with everything else).
-const V8_GOLDEN_HASH_AFTER_1000: u64 = 0x998e_78a5_2792_226e;
+const V8_GOLDEN_HASH_AFTER_1000: u64 = 0xf3ed_f9e2_1924_b61f;
 
 #[test]
 fn v8_golden_save_loads_to_the_exact_golden_state() {

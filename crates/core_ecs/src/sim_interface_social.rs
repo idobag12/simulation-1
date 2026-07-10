@@ -84,9 +84,14 @@ impl Relationships {
     }
 
     /// Upserts an edge (clamped to `0..=1000`), keeping the vector in
-    /// (other index, kind order) order and the CAP enforced: when full,
-    /// the weakest Friend/Romance edge evicts (kin and spouses never
-    /// do); a new edge weaker than everything is simply not recorded.
+    /// (other index, kind order) order. The CAP bounds Friend/Romance:
+    /// when full, the weakest of them evicts (kin and spouses never
+    /// do), and a new drift edge weaker than everything is simply not
+    /// recorded. Kin and Spouse edges are PRIVILEGED — they always
+    /// record (evicting the weakest drift edge, or exceeding the cap
+    /// when only kin remain): a full heart never forgets family, and a
+    /// one-sided kin graph would defeat the incest screen and the
+    /// bigamy check.
     pub fn upsert(&mut self, other: Entity, kind: RelKind, strength_per_mille: i32, cap: usize) {
         let strength = strength_per_mille.clamp(0, 1000);
         if let Some(edge) = self
@@ -105,11 +110,16 @@ impl Relationships {
                 .filter(|(_, edge)| matches!(edge.kind, RelKind::Friend | RelKind::Romance))
                 .min_by_key(|(_, edge)| (edge.strength_per_mille, edge.other.index()))
                 .map(|(index, edge)| (index, edge.strength_per_mille));
+            let privileged = matches!(kind, RelKind::Kin | RelKind::Spouse);
             match weakest {
+                Some((index, _)) if privileged => {
+                    self.edges.remove(index);
+                }
                 Some((index, weakest_strength)) if weakest_strength < strength => {
                     self.edges.remove(index);
                 }
-                _ => return, // full of stronger bonds: the new edge is not recorded
+                _ if privileged => {} // only family left: exceed the cap
+                _ => return,          // full of stronger bonds: the drift edge is not recorded
             }
         }
         self.edges.push(Edge {
@@ -197,4 +207,95 @@ pub struct SchoolAttended {
 
 impl crate::Event for SchoolAttended {
     const NAME: &'static str = "people.school_attended";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::World;
+    use core_types::Seed;
+
+    fn entities(count: usize) -> Vec<Entity> {
+        let mut world = World::new(Seed::new(9), 64);
+        (0..count).map(|_| world.spawn()).collect()
+    }
+
+    /// ADR 0010 §2: the cap bounds DRIFT edges — a stronger newcomer
+    /// evicts the weakest, a weaker one is simply not recorded — and an
+    /// existing edge always updates in place (never duplicated, never
+    /// blocked by the cap).
+    #[test]
+    fn upsert_bounds_drift_edges_at_the_cap() {
+        let e = entities(5);
+        let mut rel = Relationships::default();
+        rel.upsert(e[1], RelKind::Friend, 300, 2);
+        rel.upsert(e[2], RelKind::Friend, 500, 2);
+        // Weaker than everything at the cap: not recorded.
+        rel.upsert(e[3], RelKind::Friend, 200, 2);
+        assert_eq!(rel.strength(e[3], RelKind::Friend), None);
+        // Stronger: the weakest drift edge gives way.
+        rel.upsert(e[3], RelKind::Romance, 400, 2);
+        assert_eq!(rel.strength(e[1], RelKind::Friend), None);
+        assert_eq!(rel.strength(e[3], RelKind::Romance), Some(400));
+        // An EXISTING edge updates in place at the cap (and clamps).
+        rel.upsert(e[3], RelKind::Romance, 1500, 2);
+        assert_eq!(rel.strength(e[3], RelKind::Romance), Some(1000));
+        assert_eq!(rel.edges.len(), 2);
+        // The vector stays in (other index, kind order) order.
+        let keys: Vec<(u32, u8)> = rel
+            .edges
+            .iter()
+            .map(|edge| (edge.other.index(), edge.kind.order()))
+            .collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted);
+    }
+
+    /// ADR 0010 §2: Kin and Spouse are PRIVILEGED — they always record.
+    /// At the cap they evict the weakest drift edge regardless of
+    /// relative strength (a one-sided kin graph would defeat the incest
+    /// screen; a one-sided marriage, the bigamy check), and when only
+    /// family remains they exceed the cap outright.
+    #[test]
+    fn upsert_always_records_kin_and_spouse() {
+        let e = entities(6);
+        let mut rel = Relationships::default();
+        rel.upsert(e[1], RelKind::Friend, 500, 2);
+        rel.upsert(e[2], RelKind::Friend, 600, 2);
+        // Kin at strength 100 still lands — privilege, not strength.
+        rel.upsert(e[3], RelKind::Kin, 100, 2);
+        assert_eq!(rel.strength(e[3], RelKind::Kin), Some(100));
+        assert_eq!(
+            rel.strength(e[1], RelKind::Friend),
+            None,
+            "the weakest drift edge gave way to family"
+        );
+        // Spouse evicts the remaining friend the same way.
+        rel.upsert(e[4], RelKind::Spouse, 1000, 2);
+        assert_eq!(rel.strength(e[4], RelKind::Spouse), Some(1000));
+        assert_eq!(rel.strength(e[2], RelKind::Friend), None);
+        // Only family left: a newborn's kin edge exceeds the cap rather
+        // than vanish.
+        rel.upsert(e[5], RelKind::Kin, 1000, 2);
+        assert_eq!(rel.strength(e[5], RelKind::Kin), Some(1000));
+        assert_eq!(rel.edges.len(), 3, "family may exceed the cap");
+        // A drift edge still cannot enter the all-family list.
+        rel.upsert(e[1], RelKind::Friend, 900, 2);
+        assert_eq!(rel.strength(e[1], RelKind::Friend), None);
+    }
+
+    /// `remove` deletes exactly the `(other, kind)` edge — the same
+    /// other's other kinds survive (a sibling who was also a friend
+    /// stays a sibling).
+    #[test]
+    fn remove_touches_only_the_exact_edge() {
+        let e = entities(2);
+        let mut rel = Relationships::default();
+        rel.upsert(e[1], RelKind::Kin, 1000, 4);
+        rel.upsert(e[1], RelKind::Friend, 400, 4);
+        rel.remove(e[1], RelKind::Friend);
+        assert_eq!(rel.strength(e[1], RelKind::Friend), None);
+        assert_eq!(rel.strength(e[1], RelKind::Kin), Some(1000));
+    }
 }

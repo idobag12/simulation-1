@@ -130,6 +130,7 @@ pub(crate) fn tables() -> EconTables {
         labor_skill_weight_per_mille: 0,
         public_skill: 0,
         doing_gain_per_shift_per_mille: 0,
+        skill_count: 0,
     }
 }
 

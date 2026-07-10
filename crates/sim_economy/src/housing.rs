@@ -88,15 +88,17 @@ impl System for RentSystem {
                 .unwrap_or(Money::ZERO);
             let Some(owner) = owner.filter(|owner| world.is_alive(*owner)) else {
                 // Ownerless home (should not happen; defensive): the
-                // arrangement ends entirely — tenancy AND residence —
-                // so the ex-tenant re-enters the rental market instead
-                // of squatting rent-free forever.
+                // arrangement ends entirely — tenancy AND every
+                // co-resident's residence — so the household re-enters
+                // the rental market instead of squatting forever.
                 world.remove::<Tenancy>(tenant)?;
-                if world
-                    .get::<Residence>(tenant)?
-                    .is_some_and(|residence| residence.home == tenancy.home)
-                {
-                    world.remove::<Residence>(tenant)?;
+                let evicted: Vec<Entity> = world
+                    .iter::<Residence>()?
+                    .filter(|(_, residence)| residence.home == tenancy.home)
+                    .map(|(resident, _)| resident)
+                    .collect();
+                for resident in evicted {
+                    world.remove::<Residence>(resident)?;
                 }
                 continue;
             };
@@ -118,11 +120,16 @@ impl System for RentSystem {
                 }
             } else {
                 world.remove::<Tenancy>(tenant)?;
-                if world
-                    .get::<Residence>(tenant)?
-                    .is_some_and(|residence| residence.home == tenancy.home)
-                {
-                    world.remove::<Residence>(tenant)?;
+                // The WHOLE household leaves — a co-resident spouse or
+                // child left behind would squat rent-free on a home the
+                // market thinks is occupied (Phase 7 review).
+                let evicted: Vec<Entity> = world
+                    .iter::<Residence>()?
+                    .filter(|(_, residence)| residence.home == tenancy.home)
+                    .map(|(resident, _)| resident)
+                    .collect();
+                for resident in evicted {
+                    world.remove::<Residence>(resident)?;
                 }
             }
         }

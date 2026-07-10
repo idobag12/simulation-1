@@ -111,6 +111,7 @@ pub fn load_config(defs: &DataDefs) -> Result<LoadConfig, RunnerError> {
 /// AI set (Phase 3, ADR 0006 §8); v5 = + economy set (Phase 4,
 /// ADR 0007 §9 — components AND the two economy events); v6 = + labor
 /// set (Phase 5, ADR 0008 §8); v7 = + money set (Phase 6, ADR 0009 §6).
+// v8 (Phase 7): + social registrations and events (ADR 0010 §6).
 pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register::<fixture::FixtureWealth>()?;
     world.register::<fixture::FixtureTag>()?;
