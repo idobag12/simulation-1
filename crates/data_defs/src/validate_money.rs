@@ -262,6 +262,7 @@ pub(crate) fn validate_money(
 
 /// Phase 7 social-layer validation (ADR 0010 §7): skills/school,
 /// the social graph, and fertility.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_social(
     data_root: &Path,
     skills: &sim_people::config::SkillsConfig,
