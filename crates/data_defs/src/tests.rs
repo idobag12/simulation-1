@@ -92,6 +92,10 @@ const GOOD_FERTILITY: &str = r#"FertilityConfig(
         ],
         max_household_size: 6, trait_mutation_per_mille: 120,
     )"#;
+const GOOD_LOD: &str = r#"LodConfig(
+        tier_a_cap: 200, tier_b_cap: 2000, highlight_days: 3,
+        leisure_hours_per_day: 4, macro_tolerance_per_mille: 150,
+    )"#;
 const GOOD_TAXES: &str = r#"TaxesConfig(
         income_per_mille: 100, sales_per_mille: 50, treasury_seed_mills: 50000,
         public_positions: 2, public_wage_bid_mills: 200,
@@ -152,6 +156,7 @@ pub(crate) fn write_tree(overrides: &[(&str, &str)]) -> PathBuf {
         ("skills.ron", GOOD_SKILLS),
         ("balance/social.ron", GOOD_SOCIAL),
         ("balance/fertility.ron", GOOD_FERTILITY),
+        ("balance/lod.ron", GOOD_LOD),
     ];
     for (rel, content) in base {
         let path = root.join(rel);

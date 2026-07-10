@@ -115,6 +115,12 @@ pub fn resolve_ai(defs: &DataDefs) -> sim_ai::AiTables {
                 .unwrap_or(0) as u32,
         },
         skill_count: defs.skills.skills.len() as u32,
+        lod: sim_ai::config::LodTables {
+            tier_a_cap: defs.lod.tier_a_cap,
+            tier_b_cap: defs.lod.tier_b_cap,
+            highlight_days: defs.lod.highlight_days,
+            leisure_hours_per_day: defs.lod.leisure_hours_per_day,
+        },
     }
 }
 

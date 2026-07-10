@@ -222,7 +222,7 @@ fn v6_to_v7(mut v6: SaveBodyV6) -> Result<SaveBody, PersistError> {
 
 /// Format v7 body, FROZEN. Structurally identical to v8 — v7→v8 only
 /// appends registrations — so the alias documents the version boundary.
-type SaveBodyV7 = SaveBody;
+type SaveBodyV7 = SaveBodyV8;
 
 // Registration growth from v7 to v8 (Phase 7, ADR 0010 §6). Historical
 // facts of the format, frozen here forever.
@@ -240,7 +240,7 @@ const V8_ADDED_EVENTS: [&str; 3] = ["social.married", "people.born", "people.sch
 /// event-name list extends losslessly. Migrated citizens have no
 /// skills, edges, or beliefs — every Phase 7 system builds state from
 /// lived events, inventing nothing.
-fn v7_to_v8(mut v7: SaveBodyV7) -> Result<SaveBody, PersistError> {
+fn v7_to_v8(mut v7: SaveBodyV7) -> Result<SaveBodyV8, PersistError> {
     let empty_store = codec::to_bytes(&Vec::<(u32, u8)>::new())?;
     for name in V8_ADDED_COMPONENTS {
         v7.components.push((name.to_owned(), empty_store.clone()));
@@ -252,39 +252,71 @@ fn v7_to_v8(mut v7: SaveBodyV7) -> Result<SaveBody, PersistError> {
     Ok(v7)
 }
 
+/// Format v8 body, FROZEN. Structurally identical to v9 — v8→v9 only
+/// appends registrations — so the alias documents the version boundary.
+type SaveBodyV8 = SaveBody;
+
+// Registration growth from v8 to v9 (Phase 8, ADR 0011 §6). Historical
+// facts of the format, frozen here forever.
+const V9_ADDED_COMPONENTS: [&str; 3] = ["lod.tier", "lod.day_model", "lod.spotlight"];
+const V9_ADDED_EVENTS: [&str; 1] = ["lod.tier_changed"];
+
+/// Pure step v8 → v9 (ADR 0011 §6): the registration grew by the LOD
+/// components and the tier-change event, all appended after the v8 set.
+/// A v8 world carried no tier rows, so each new store is empty — every
+/// migrated citizen runs Tier A (the pre-v9 status quo) until the first
+/// day boundary's assignment stamps them; nothing is invented.
+fn v8_to_v9(mut v8: SaveBodyV8) -> Result<SaveBody, PersistError> {
+    let empty_store = codec::to_bytes(&Vec::<(u32, u8)>::new())?;
+    for name in V9_ADDED_COMPONENTS {
+        v8.components.push((name.to_owned(), empty_store.clone()));
+    }
+    if !v8.events.is_empty() {
+        v8.events = core_events::extend_registration_bytes(&v8.events, &V9_ADDED_EVENTS)
+            .map_err(EcsError::from)?;
+    }
+    Ok(v8)
+}
+
 /// Migrates a decompressed save body from `version` to the current
-/// [`SaveBody`], chaining pure steps (`v1 → v2 → … → v8`).
+/// [`SaveBody`], chaining pure steps (`v1 → v2 → … → v9`).
 pub(crate) fn migrate_to_current(version: u32, raw: Vec<u8>) -> Result<SaveBody, PersistError> {
     match version {
         1 => {
             let v1: SaveBodyV1 = codec::from_bytes(&raw)?;
-            v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v3_to_v4(v2_to_v3(
-                v1_to_v2(v1),
+            v8_to_v9(v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v3_to_v4(
+                v2_to_v3(v1_to_v2(v1))?,
             )?)?)?)?)?)
         }
         2 => {
             let v2: SaveBodyV2 = codec::from_bytes(&raw)?;
-            v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v3_to_v4(v2_to_v3(v2)?)?)?)?)?)
+            v8_to_v9(v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v3_to_v4(
+                v2_to_v3(v2)?,
+            )?)?)?)?)?)
         }
         3 => {
             let v3: SaveBodyV3 = codec::from_bytes(&raw)?;
-            v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v3_to_v4(v3)?)?)?)?)
+            v8_to_v9(v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v3_to_v4(v3)?)?)?)?)?)
         }
         4 => {
             let v4: SaveBodyV4 = codec::from_bytes(&raw)?;
-            v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v4)?)?)?)
+            v8_to_v9(v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v4)?)?)?)?)
         }
         5 => {
             let v5: SaveBodyV5 = codec::from_bytes(&raw)?;
-            v7_to_v8(v6_to_v7(v5_to_v6(v5)?)?)
+            v8_to_v9(v7_to_v8(v6_to_v7(v5_to_v6(v5)?)?)?)
         }
         6 => {
             let v6: SaveBodyV6 = codec::from_bytes(&raw)?;
-            v7_to_v8(v6_to_v7(v6)?)
+            v8_to_v9(v7_to_v8(v6_to_v7(v6)?)?)
         }
         7 => {
             let v7: SaveBodyV7 = codec::from_bytes(&raw)?;
-            v7_to_v8(v7)
+            v8_to_v9(v7_to_v8(v7)?)
+        }
+        8 => {
+            let v8: SaveBodyV8 = codec::from_bytes(&raw)?;
+            v8_to_v9(v8)
         }
         FORMAT_VERSION => Ok(codec::from_bytes(&raw)?),
         other => Err(PersistError::UnsupportedVersion(other)),

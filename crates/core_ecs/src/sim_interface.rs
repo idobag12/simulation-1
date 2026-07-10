@@ -27,6 +27,9 @@ mod social;
 pub use social::{
     Beliefs, Born, Edge, Married, RelKind, Relationships, SchoolAge, SchoolAttended, Skills,
 };
+#[path = "sim_interface_lod.rs"]
+mod lod;
+pub use lod::{DayModel, LodTier, Spotlight, Tier, TierChanged};
 
 /// One need level in per-million units (ADR 0005 §2): 0 = fully depleted,
 /// [`NeedLevel::MAX`] = fully satisfied.

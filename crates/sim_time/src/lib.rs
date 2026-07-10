@@ -161,6 +161,36 @@ impl Simulation {
         Ok(())
     }
 
+    /// The catch-up integrator (SPEC §5; Phase 8, ADR 0011 §5):
+    /// advances `count` ticks in HOUR strides. Boundary-rate systems
+    /// run exactly where and in the order the normal loop would run
+    /// them; tick-rate systems are skipped — per-tick agent behavior is
+    /// what the day models replace. Scheduled events due mid-stride
+    /// fire at the next stride's start (`begin_tick` drains everything
+    /// due). Deterministic: a DEFINED coarse integrator, not a skip —
+    /// the same state caught up the same span always lands identically,
+    /// but it is NOT tick-equivalent to the full loop.
+    pub fn run_ticks_coarse(
+        &mut self,
+        schedule: &mut Schedule,
+        count: u64,
+    ) -> Result<(), EcsError> {
+        let ticks_per_hour = core_types::calendar::TICKS_PER_DAY / 24;
+        let target = self.tick.try_add(count)?;
+        while self.tick < target {
+            let ctx = TickContext {
+                tick: self.tick,
+                time: self.calendar.time_of(self.tick),
+            };
+            self.world.begin_tick(self.tick);
+            schedule.run_tick_coarse(&mut self.world, &ctx)?;
+            // Stride to the next hour boundary (or the target).
+            let next_boundary = (self.tick.raw() / ticks_per_hour + 1) * ticks_per_hour;
+            self.tick = Ticks::new(next_boundary.min(target.raw()));
+        }
+        Ok(())
+    }
+
     /// The canonical world-state hash (SPEC §9 `hash_world()`): tick
     /// counter, then full world state (entities, every component store in
     /// registration order, RNG stream states, event state).

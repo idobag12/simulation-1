@@ -20,9 +20,13 @@
 pub mod components;
 pub mod config;
 pub mod systems;
+pub mod systems_lod;
 pub mod systems_social;
 
 pub use components::{CandidateAction, CurrentAction, DailyPlan, LastDecision, ScoredCandidate};
-pub use config::{AiConfig, AiTables, SocialConfig};
+pub use config::{AiConfig, AiTables, LodConfig, SocialConfig};
 pub use systems::{ActSystem, DecideSystem, PlanSystem};
+pub use systems_lod::{
+    SpotlightSystem, TierAssignSystem, TierBSystem, TierCSystem, demote_all_to_c,
+};
 pub use systems_social::{RelationshipDecaySystem, SocialDriftSystem};

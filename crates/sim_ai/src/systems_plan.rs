@@ -58,11 +58,21 @@ impl System for PlanSystem {
         if ctx.time.hour != self.tables.plan_compile_hour {
             return Ok(());
         }
-        // Pass 1 (immutable): compile plans in entity order.
-        let plans: Vec<(Entity, DailyPlan)> = world
-            .iter::<Personality>()?
-            .map(|(entity, personality)| (entity, self.plan_for(personality)))
-            .collect();
+        // Pass 1 (immutable): compile plans in entity order. Tier C
+        // citizens carry no plan — the day model IS their day (Phase 8,
+        // ADR 0011 §2); Tier B executes the plan's sleep window.
+        let mut plans: Vec<(Entity, DailyPlan)> = Vec::new();
+        for (entity, personality) in world.iter::<Personality>()? {
+            if matches!(
+                world
+                    .get::<core_ecs::sim_interface::LodTier>(entity)?
+                    .map(|row| row.tier),
+                Some(core_ecs::sim_interface::Tier::C)
+            ) {
+                continue;
+            }
+            plans.push((entity, self.plan_for(personality)));
+        }
         // Pass 2: write.
         for (entity, plan) in plans {
             world.insert(entity, plan)?;

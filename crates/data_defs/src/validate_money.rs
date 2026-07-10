@@ -467,3 +467,28 @@ pub(crate) fn validate_social(
     }
     Ok(())
 }
+
+/// Validates `balance/lod.ron` (Phase 8, ADR 0011 §7).
+pub(crate) fn validate_lod(
+    data_root: &Path,
+    lod: &sim_ai::config::LodConfig,
+) -> Result<(), DataError> {
+    let e = |message: String| verr(data_root, "balance/lod.ron", message);
+    if lod.tier_a_cap == 0 {
+        return Err(e(
+            "tier_a_cap must be >= 1 (someone anchors the embodied town)".into(),
+        ));
+    }
+    if lod.highlight_days == 0 {
+        return Err(e("highlight_days must be >= 1".into()));
+    }
+    if lod.leisure_hours_per_day >= 24 {
+        return Err(e(
+            "leisure_hours_per_day must be < 24 (a day also sleeps)".into()
+        ));
+    }
+    if lod.macro_tolerance_per_mille > 1000 {
+        return Err(e("macro_tolerance_per_mille must be <= 1000".into()));
+    }
+    Ok(())
+}

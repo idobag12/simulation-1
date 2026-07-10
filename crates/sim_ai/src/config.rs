@@ -158,6 +158,8 @@ pub struct AiTables {
     pub social: SocialTables,
     /// Total skills in data order (the `Skills.levels` length).
     pub skill_count: u32,
+    /// The LOD tier tunables (Phase 8, ADR 0011).
+    pub lod: LodTables,
 }
 
 impl AiTables {
@@ -199,6 +201,39 @@ pub struct SocialConfig {
     pub social_bond_weight_per_mille: i64,
     /// Bounded believed-price rows per citizen.
     pub belief_cap: u32,
+}
+
+/// `data/balance/lod.ron` (Phase 8, ADR 0011): the tier caps, the
+/// spotlight pin length, the day model's leisure block, and the macro
+/// acceptance band.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LodConfig {
+    /// Embodied (per-tick) citizens, at most.
+    pub tier_a_cap: u32,
+    /// Scheduled (per-hour) citizens, at most, after Tier A fills.
+    pub tier_b_cap: u32,
+    /// Days a high-signal fact pins its citizens to Tier A.
+    pub highlight_days: u32,
+    /// The day model's leisure block (hours at the best venue).
+    pub leisure_hours_per_day: u32,
+    /// Macro-series acceptance band for tiered-vs-embodied twins.
+    pub macro_tolerance_per_mille: u32,
+}
+
+/// The resolved LOD tables, carried in [`AiTables`] (identical to the
+/// config today — kept as its own type so resolution stays the one
+/// place data becomes tables, like every other config).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LodTables {
+    /// See [`LodConfig::tier_a_cap`].
+    pub tier_a_cap: u32,
+    /// See [`LodConfig::tier_b_cap`].
+    pub tier_b_cap: u32,
+    /// See [`LodConfig::highlight_days`].
+    pub highlight_days: u32,
+    /// See [`LodConfig::leisure_hours_per_day`].
+    pub leisure_hours_per_day: u32,
 }
 
 /// The resolved social tables (string ids → indices), carried in

@@ -245,10 +245,22 @@ impl System for RelationshipDecaySystem {
         _cmd: &mut CommandBuffer,
     ) -> Result<(), EcsError> {
         let decay = self.decay_per_day_per_mille;
-        let citizens: Vec<Entity> = world
-            .iter::<Relationships>()?
-            .map(|(citizen, _)| citizen)
-            .collect();
+        // Tier C citizens do not visit venues, so their drift pauses —
+        // and decay pauses with it (Phase 8, ADR 0011 §9): absence from
+        // the EMBODIED world must not dissolve bonds the day model
+        // cannot rebuild.
+        let mut citizens: Vec<Entity> = Vec::new();
+        for (citizen, _) in world.iter::<Relationships>()? {
+            if matches!(
+                world
+                    .get::<core_ecs::sim_interface::LodTier>(citizen)?
+                    .map(|row| row.tier),
+                Some(core_ecs::sim_interface::Tier::C)
+            ) {
+                continue;
+            }
+            citizens.push(citizen);
+        }
         for citizen in citizens {
             if let Some(relationships) = world.get_mut::<Relationships>(citizen)? {
                 for edge in &mut relationships.edges {
@@ -323,6 +335,12 @@ mod tests {
                 spark_trait: 0,
             },
             skill_count: 1,
+            lod: crate::config::LodTables {
+                tier_a_cap: 1000,
+                tier_b_cap: 1000,
+                highlight_days: 1,
+                leisure_hours_per_day: 4,
+            },
         }
     }
 

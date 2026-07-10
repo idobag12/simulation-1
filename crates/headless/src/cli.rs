@@ -22,7 +22,8 @@ pub const EXIT_ERROR: u8 = 2;
 /// Usage text printed on errors.
 pub const USAGE: &str = "usage:
   embervale run --seed N --ticks N [--hash-interval N] [--fixture] [--entities N]
-                [--citizens N] [--save PATH] [--load PATH] [--stats-csv PATH] [--data DIR]
+                [--citizens N] [--catch-up-days N] [--save PATH] [--load PATH]
+                [--stats-csv PATH] [--data DIR]
   embervale verify --seed N --ticks N [--hash-interval N] [--fixture] [--entities N]
                 [--citizens N] [--data DIR]
   embervale save-load-check --seed N --ticks N [--resume-at N] [--fixture] [--entities N]
@@ -82,6 +83,7 @@ struct Flags {
     entities: u32,
     citizens: u32,
     resume_at: Option<u64>,
+    catch_up_days: u64,
     save: Option<PathBuf>,
     load: Option<PathBuf>,
     stats_csv: Option<PathBuf>,
@@ -99,6 +101,7 @@ impl Flags {
             entities: 200,
             citizens: 0,
             resume_at: None,
+            catch_up_days: 0,
             save: None,
             load: None,
             stats_csv: None,
@@ -120,6 +123,9 @@ impl Flags {
                 "--citizens" => flags.citizens = parse_num(value("--citizens")?, "--citizens")?,
                 "--resume-at" => {
                     flags.resume_at = Some(parse_num(value("--resume-at")?, "--resume-at")?);
+                }
+                "--catch-up-days" => {
+                    flags.catch_up_days = parse_num(value("--catch-up-days")?, "--catch-up-days")?;
                 }
                 "--entity" => flags.entity = Some(parse_num(value("--entity")?, "--entity")?),
                 "--fixture" => flags.fixture = true,
@@ -200,6 +206,16 @@ fn cmd_run(flags: &Flags) -> Result<bool, String> {
         None => runner::build_simulation(&flags.spec()?, &defs).map_err(|e| e.to_string())?,
     };
 
+    if flags.catch_up_days > 0 {
+        // Fast-forward FIRST (SPEC §5): the coarse integrator covers the
+        // elapsed span, then the per-tick run continues from there.
+        runner::catch_up(&mut sim, &defs, flags.catch_up_days).map_err(|e| e.to_string())?;
+        eprintln!(
+            "caught up {} day(s); resuming at tick {}",
+            flags.catch_up_days,
+            sim.tick()
+        );
+    }
     let hashes = match &flags.stats_csv {
         Some(path) => run_with_stats(&mut sim, &mut schedule, ticks, flags.hash_interval, path)?,
         None => runner::run_with_hashes(&mut sim, &mut schedule, ticks, flags.hash_interval)

@@ -124,6 +124,19 @@ fn citizen_report(
             status.uncreditworthy_until_day
         ));
     }
+    // Phase 8 (SPEC §13): the simulation tier (missing row = embodied).
+    let tier = match world
+        .get::<core_ecs::sim_interface::LodTier>(entity)
+        .map_err(err)?
+    {
+        Some(row) => match row.tier {
+            core_ecs::sim_interface::Tier::A => "A (embodied)",
+            core_ecs::sim_interface::Tier::B => "B (scheduled)",
+            core_ecs::sim_interface::Tier::C => "C (statistical)",
+        },
+        None => "A (embodied; unassigned)",
+    };
+    out.push_str(&format!("tier: {tier}\n"));
     // Phase 7 social state (SPEC §13): skills, bonds, beliefs.
     if let Some(skills) = world
         .get::<core_ecs::sim_interface::Skills>(entity)

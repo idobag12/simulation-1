@@ -314,9 +314,20 @@ impl System for DecideSystem {
         }
 
         // Pass 1 (immutable): snapshot citizens that need a decision.
+        // Only the embodied tier decides per tick (Phase 8, ADR 0011
+        // §2; a missing tier row means Tier A — migrations never
+        // invent state).
         let mut deciders: Vec<Decider> = Vec::new();
         for (entity, needs) in world.iter::<Needs>()? {
             if world.get::<CurrentAction>(entity)?.is_some() {
+                continue;
+            }
+            if matches!(
+                world
+                    .get::<core_ecs::sim_interface::LodTier>(entity)?
+                    .map(|row| row.tier),
+                Some(core_ecs::sim_interface::Tier::B | core_ecs::sim_interface::Tier::C)
+            ) {
                 continue;
             }
             let traits = world
@@ -389,6 +400,7 @@ mod act;
 #[path = "systems_score.rs"]
 mod score;
 pub use act::ActSystem;
+pub(crate) use act::purchase_unit;
 #[path = "systems_plan.rs"]
 mod plan;
 pub use plan::PlanSystem;

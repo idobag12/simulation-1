@@ -1,0 +1,16 @@
+// LOD tier tunables (Phase 8, ADR 0011; SPEC §10).
+LodConfig(
+    // Embodied (per-tick) citizens: the stable front of the town plus
+    // event-pinned citizens, up to this many.
+    tier_a_cap: 200,
+    // Scheduled (per-hour) citizens, after Tier A fills.
+    tier_b_cap: 2000,
+    // Days a high-signal fact pins its citizens to Tier A.
+    highlight_days: 3,
+    // The day model's default leisure block (hours at the best venue).
+    leisure_hours_per_day: 4,
+    // The macro-indistinguishability acceptance band (SPEC §15 Phase 8
+    // "defined tolerance"): per-day macro series of a tiered town must
+    // stay within this of the all-Tier-A twin, averaged over the run.
+    macro_tolerance_per_mille: 150,
+)

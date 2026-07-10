@@ -140,6 +140,30 @@ impl Schedule {
         Self::run_list(&mut self.tick_systems, world, ctx)
     }
 
+    /// Runs one COARSE tick (Phase 8, ADR 0011 §5 — the catch-up
+    /// integrator): every boundary rate exactly as [`Self::run_tick`]
+    /// orders them, but the tick-rate list is skipped — per-tick agent
+    /// behavior is what the day models replace.
+    pub fn run_tick_coarse(
+        &mut self,
+        world: &mut World,
+        ctx: &TickContext,
+    ) -> Result<(), EcsError> {
+        if ctx.time.starts_year() {
+            Self::run_list(&mut self.year_systems, world, ctx)?;
+        }
+        if ctx.time.starts_season() {
+            Self::run_list(&mut self.season_systems, world, ctx)?;
+        }
+        if ctx.time.starts_day() {
+            Self::run_list(&mut self.day_systems, world, ctx)?;
+        }
+        if ctx.time.starts_hour() {
+            Self::run_list(&mut self.hour_systems, world, ctx)?;
+        }
+        Ok(())
+    }
+
     fn run_list(
         systems: &mut [Box<dyn System>],
         world: &mut World,

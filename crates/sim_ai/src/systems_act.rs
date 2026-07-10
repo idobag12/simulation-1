@@ -349,12 +349,41 @@ fn execute_purchase(
     sales_tax_per_mille: i64,
     belief_cap: usize,
 ) -> Result<(), EcsError> {
-    let offer = match world.get::<RetailOffer>(seller)? {
-        Some(offer) => *offer,
+    match purchase_unit(world, buyer, seller, sales_tax_per_mille, belief_cap)? {
+        Some(offer) => {
+            world.insert(
+                buyer,
+                CurrentAction::Consume {
+                    at: seller,
+                    need_index: offer.need_index,
+                    remaining: offer.use_ticks,
+                },
+            )?;
+        }
         None => {
             world.remove::<CurrentAction>(buyer)?;
-            return Ok(());
         }
+    }
+    Ok(())
+}
+
+/// The tier-agnostic core of one retail purchase (Phase 8, ADR 0011 §2:
+/// Tier B/C demand goes through the SAME till): checks offer, stock,
+/// and cash; on success moves money, tax, stock, counters, the buyer's
+/// need, and the belief, and emits the fact — returning the offer.
+/// `None` means nothing happened (no offer, empty shelf, or a short
+/// wallet). No action-state side effects — the embodied wrapper above
+/// owns those.
+pub(crate) fn purchase_unit(
+    world: &mut World,
+    buyer: Entity,
+    seller: Entity,
+    sales_tax_per_mille: i64,
+    belief_cap: usize,
+) -> Result<Option<RetailOffer>, EcsError> {
+    let offer = match world.get::<RetailOffer>(seller)? {
+        Some(offer) => *offer,
+        None => return Ok(None),
     };
     let stock = world
         .get::<Inventory>(seller)?
@@ -366,8 +395,7 @@ fn execute_purchase(
         .unwrap_or(0);
     let price = offer.unit_price;
     if stock < 1 || cash < price.mills() {
-        world.remove::<CurrentAction>(buyer)?;
-        return Ok(());
+        return Ok(None);
     }
     // A retail offer only exists in worlds seeded with a conservation
     // ledger; selling without one would be uncounted consumption.
@@ -475,13 +503,5 @@ fn execute_purchase(
         quantity: 1,
         total: price,
     })?;
-    world.insert(
-        buyer,
-        CurrentAction::Consume {
-            at: seller,
-            need_index: offer.need_index,
-            remaining: offer.use_ticks,
-        },
-    )?;
-    Ok(())
+    Ok(Some(offer))
 }

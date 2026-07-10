@@ -107,6 +107,8 @@ pub struct DataDefs {
     pub social: sim_ai::config::SocialConfig,
     /// Reproduction (Phase 7, ADR 0010 §4).
     pub fertility: sim_people::config::FertilityConfig,
+    /// LOD tiers and catch-up (Phase 8, ADR 0011 §7).
+    pub lod: sim_ai::config::LodConfig,
 }
 
 /// Loads and validates every data definition from a `data/` directory
@@ -139,6 +141,7 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
     let social: sim_ai::config::SocialConfig = load_ron(&data_root.join("balance/social.ron"))?;
     let fertility: sim_people::config::FertilityConfig =
         load_ron(&data_root.join("balance/fertility.ron"))?;
+    let lod: sim_ai::config::LodConfig = load_ron(&data_root.join("balance/lod.ron"))?;
     validate(data_root, &calendar, &engine)?;
     validate_people(data_root, &calendar, &people)?;
     validate_locations(data_root, &locations, &people)?;
@@ -166,6 +169,7 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
         &locations,
         labor.min_working_age_years,
     )?;
+    validate_lod(data_root, &lod)?;
     Ok(DataDefs {
         calendar,
         engine,
@@ -183,6 +187,7 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
         skills,
         social,
         fertility,
+        lod,
     })
 }
 
@@ -204,7 +209,7 @@ mod validate_money;
 pub use resolve::{resolve_ai, resolve_economy};
 use validate::{validate, validate_ai, validate_locations, validate_people};
 use validate_econ::validate_economy;
-use validate_money::{validate_labor, validate_money, validate_social};
+use validate_money::{validate_labor, validate_lod, validate_money, validate_social};
 
 #[cfg(test)]
 #[path = "tests.rs"]

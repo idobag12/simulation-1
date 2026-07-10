@@ -111,7 +111,8 @@ pub fn load_config(defs: &DataDefs) -> Result<LoadConfig, RunnerError> {
 /// AI set (Phase 3, ADR 0006 §8); v5 = + economy set (Phase 4,
 /// ADR 0007 §9 — components AND the two economy events); v6 = + labor
 /// set (Phase 5, ADR 0008 §8); v7 = + money set (Phase 6, ADR 0009 §6).
-// v8 (Phase 7): + social registrations and events (ADR 0010 §6).
+// v8 (Phase 7): + social registrations and events (ADR 0010 §6);
+// v9 (Phase 8): + LOD registrations and the tier-change event (ADR 0011 §6).
 pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register::<fixture::FixtureWealth>()?;
     world.register::<fixture::FixtureTag>()?;
@@ -146,6 +147,10 @@ pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register::<core_ecs::sim_interface::Relationships>()?;
     world.register::<core_ecs::sim_interface::Beliefs>()?;
     world.register::<core_ecs::sim_interface::SchoolAge>()?;
+    // Phase 8 (ADR 0011 §6): order matches V9_ADDED_COMPONENTS.
+    world.register::<core_ecs::sim_interface::LodTier>()?;
+    world.register::<core_ecs::sim_interface::DayModel>()?;
+    world.register::<core_ecs::sim_interface::Spotlight>()?;
     world.register_event::<fixture::FixtureChurn>()?;
     world.register_event::<fixture::FixtureAlarm>()?;
     world.register_event::<sim_people::PersonDied>()?;
@@ -162,6 +167,7 @@ pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register_event::<core_ecs::sim_interface::Married>()?;
     world.register_event::<core_ecs::sim_interface::Born>()?;
     world.register_event::<core_ecs::sim_interface::SchoolAttended>()?;
+    world.register_event::<core_ecs::sim_interface::TierChanged>()?;
     Ok(())
 }
 
@@ -215,6 +221,18 @@ pub fn derive_spec_from_world(world: &World) -> Result<WorldSpec, EcsError> {
 /// the citizen systems no-op honestly over an empty town — so a
 /// post-extinction resume evolves exactly like the uninterrupted run.
 pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
+    build_schedule_inner(spec, defs, false)
+}
+
+/// The catch-up controller's schedule (Phase 8, ADR 0011 §5): the
+/// normal schedule minus the tier assignment — catch-up runs everyone
+/// as Tier C, and nothing may re-promote mid-flight (tick-rate systems
+/// are skipped by the coarse loop itself).
+pub fn build_catchup_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
+    build_schedule_inner(spec, defs, true)
+}
+
+fn build_schedule_inner(spec: &WorldSpec, defs: &DataDefs, catchup: bool) -> Schedule {
     let mut schedule = Schedule::new();
     if spec.fixture {
         schedule.add_system(Rate::Tick, Box::new(fixture::FixtureAlarmSystem));
@@ -223,6 +241,7 @@ pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
     if spec.citizens > 0 || spec.economy {
         let tables = data_defs::resolve_ai(defs);
         let econ = data_defs::resolve_economy(defs);
+        schedule.add_system(Rate::Tick, Box::new(sim_ai::SpotlightSystem::new(&tables)));
         schedule.add_system(
             Rate::Tick,
             Box::new(sim_ai::DecideSystem::new(tables.clone())),
@@ -235,6 +254,12 @@ pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
         schedule.add_system(
             Rate::Hour,
             Box::new(sim_ai::PlanSystem::new(tables.clone())),
+        );
+        // Tier B's hourly blocks (Phase 8, ADR 0011 §2) move coarse
+        // citizens BEFORE the social hour scans presence.
+        schedule.add_system(
+            Rate::Hour,
+            Box::new(sim_ai::TierBSystem::new(tables.clone())),
         );
         // The social hour (Phase 7, ADR 0010 §§2–3): bonds drift and
         // gossip spreads wherever leisure gathers people.
@@ -253,6 +278,15 @@ pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
             Rate::Hour,
             Box::new(sim_people::NeedsDecaySystem::new(decays)),
         );
+        // Tier assignment FIRST (Phase 8, ADR 0011 §1): membership is
+        // settled before anything else moves today. Catch-up omits it —
+        // everyone stays Tier C until the normal loop resumes.
+        if !catchup {
+            schedule.add_system(
+                Rate::Day,
+                Box::new(sim_ai::TierAssignSystem::new(tables.clone())),
+            );
+        }
         schedule.add_system(Rate::Day, Box::new(debug_tools::AuditSystem));
         schedule.add_system(
             Rate::Day,
@@ -291,6 +325,12 @@ pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
         schedule.add_system(
             Rate::Day,
             Box::new(sim_economy::PricingSystem::new(econ.clone())),
+        );
+        // Tier C's day models spend at today's prices (Phase 8,
+        // ADR 0011 §2), before spoilage sweeps the shelves.
+        schedule.add_system(
+            Rate::Day,
+            Box::new(sim_ai::TierCSystem::new(tables.clone())),
         );
         schedule.add_system(
             Rate::Day,
@@ -331,6 +371,21 @@ pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
         );
     }
     schedule
+}
+
+/// The catch-up controller (SPEC §5; Phase 8, ADR 0011 §5): demotes
+/// every citizen to Tier C through the normal demotion path, then runs
+/// `days` simulated days through the coarse integrator — per-day and
+/// per-hour systems run normally at their boundaries, per-tick agent
+/// behavior is replaced by the day models. The next normal day
+/// boundary's assignment restores tiers. Deterministic; budget-tested
+/// by the Phase 8 exit suite (one week at 10k citizens < 5s).
+pub fn catch_up(sim: &mut Simulation, defs: &DataDefs, days: u64) -> Result<(), EcsError> {
+    let tables = data_defs::resolve_ai(defs);
+    sim_ai::demote_all_to_c(sim.world_mut(), &tables)?;
+    let derived = derive_spec_from_world(sim.world())?;
+    let mut schedule = build_catchup_schedule(&derived, defs);
+    sim.run_ticks_coarse(&mut schedule, days * TICKS_PER_DAY)
 }
 
 /// Assembles a fresh simulation (registrations, populations, calendar) and
