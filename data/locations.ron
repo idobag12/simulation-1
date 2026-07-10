@@ -33,4 +33,10 @@ LocationsConfig(kinds: [
     ]),
     LocationKindDef(id: "bakery",   is_home: false, count: 0, satisfies: []),
     LocationKindDef(id: "woodyard", is_home: false, count: 0, satisfies: []),
+    // Phase 5 (ADR 0008 §1): every firm is a place — workplaces for the
+    // non-retail kinds, instantiated by firm genesis (count 0).
+    LocationKindDef(id: "farm",        is_home: false, count: 0, satisfies: []),
+    LocationKindDef(id: "well_site",   is_home: false, count: 0, satisfies: []),
+    LocationKindDef(id: "forest_camp", is_home: false, count: 0, satisfies: []),
+    LocationKindDef(id: "mill",        is_home: false, count: 0, satisfies: []),
 ])

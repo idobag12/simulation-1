@@ -159,7 +159,7 @@ fn validate_firms(
         ));
     }
     let mut seen: Vec<&str> = Vec::new();
-    let mut retail_location_kinds: Vec<&str> = Vec::new();
+    let mut claimed_location_kinds: Vec<&str> = Vec::new();
     for firm in &firms.kinds {
         if seen.contains(&firm.id.as_str()) {
             return Err(verr(
@@ -221,48 +221,56 @@ fn validate_firms(
                 ));
             }
         }
+        // Every firm is a place (ADR 0008 §1): the kind's location kind
+        // must exist, be public with count 0 (firm genesis creates the
+        // instances), and be claimed by exactly one firm kind.
+        let Some(location_kind) = locations
+            .kinds
+            .iter()
+            .find(|k| k.id == firm.location_kind_id)
+        else {
+            return Err(verr(
+                data_root,
+                file,
+                format!(
+                    "firm kind `{}` names unknown location kind `{}`",
+                    firm.id, firm.location_kind_id
+                ),
+            ));
+        };
+        if location_kind.is_home || location_kind.count != 0 {
+            return Err(verr(
+                data_root,
+                file,
+                format!(
+                    "firm location kind `{}` must be public with count 0 \
+                     (firm genesis creates its instances)",
+                    firm.location_kind_id
+                ),
+            ));
+        }
+        if claimed_location_kinds.contains(&firm.location_kind_id.as_str()) {
+            return Err(verr(
+                data_root,
+                file,
+                format!(
+                    "location kind `{}` is claimed by more than one firm kind",
+                    firm.location_kind_id
+                ),
+            ));
+        }
+        claimed_location_kinds.push(&firm.location_kind_id);
+        if firm.positions == 0 || firm.min_workers == 0 || firm.min_workers > firm.positions {
+            return Err(verr(
+                data_root,
+                file,
+                format!(
+                    "firm kind `{}` needs 1 <= min_workers <= positions",
+                    firm.id
+                ),
+            ));
+        }
         if let Some(retail) = &firm.retail {
-            if !locations
-                .kinds
-                .iter()
-                .any(|k| k.id == retail.location_kind_id)
-            {
-                return Err(verr(
-                    data_root,
-                    file,
-                    format!(
-                        "firm kind `{}` retails at unknown location kind `{}`",
-                        firm.id, retail.location_kind_id
-                    ),
-                ));
-            }
-            if retail_location_kinds.contains(&retail.location_kind_id.as_str()) {
-                return Err(verr(
-                    data_root,
-                    file,
-                    format!(
-                        "location kind `{}` is claimed by more than one retail firm kind",
-                        retail.location_kind_id
-                    ),
-                ));
-            }
-            retail_location_kinds.push(&retail.location_kind_id);
-            if let Some(kind) = locations
-                .kinds
-                .iter()
-                .find(|k| k.id == retail.location_kind_id)
-                && (kind.is_home || kind.count != 0)
-            {
-                return Err(verr(
-                    data_root,
-                    file,
-                    format!(
-                        "retail location kind `{}` must be public with count 0 \
-                         (firm genesis creates its instances)",
-                        retail.location_kind_id
-                    ),
-                ));
-            }
             if !people.needs.needs.iter().any(|n| n.id == retail.need_id) {
                 return Err(verr(
                     data_root,
@@ -358,12 +366,11 @@ fn validate_location_liveness(
 ) -> Result<(), DataError> {
     let file = "locations.ron";
     for kind in &locations.kinds {
-        let retail = firms.kinds.iter().any(|firm| {
-            firm.retail
-                .as_ref()
-                .is_some_and(|r| r.location_kind_id == kind.id)
-        });
-        if retail {
+        let claimed = firms
+            .kinds
+            .iter()
+            .any(|firm| firm.location_kind_id == kind.id);
+        if claimed {
             continue;
         }
         if !kind.is_home && kind.count == 0 {
@@ -371,7 +378,7 @@ fn validate_location_liveness(
                 data_root,
                 file,
                 format!(
-                    "public kind `{}` has count 0 and no retail firm (dead data)",
+                    "public kind `{}` has count 0 and no firm claims it (dead data)",
                     kind.id
                 ),
             ));
@@ -381,11 +388,86 @@ fn validate_location_liveness(
                 data_root,
                 file,
                 format!(
-                    "kind `{}` satisfies nothing and no retail firm claims it (dead data)",
+                    "kind `{}` satisfies nothing and no firm claims it (dead data)",
                     kind.id
                 ),
             ));
         }
+    }
+    Ok(())
+}
+
+/// Validates `data/balance/labor.ron` (ADR 0008 §7), including its
+/// cross-references into needs and traits.
+pub(crate) fn validate_labor(
+    data_root: &Path,
+    labor: &sim_economy::config::LaborConfig,
+    people: &sim_people::config::PeopleConfig,
+) -> Result<(), DataError> {
+    let file = "balance/labor.ron";
+    let e = |message: String| verr(data_root, file, message);
+
+    if labor.shift_start_hour >= 24 || labor.shift_end_hour > 24 {
+        return Err(e("shift hours must be within the day".into()));
+    }
+    if labor.shift_start_hour >= labor.shift_end_hour {
+        return Err(e(
+            "shift_start_hour must be before shift_end_hour (no overnight shifts)".into(),
+        ));
+    }
+    if labor.reservation_base_mills < 1 {
+        return Err(e("reservation_base_mills must be >= 1".into()));
+    }
+    for (name, value) in [
+        (
+            "reservation_wealth_per_mille",
+            labor.reservation_wealth_per_mille,
+        ),
+        (
+            "reservation_trait_discount_per_mille",
+            labor.reservation_trait_discount_per_mille,
+        ),
+    ] {
+        if !(0..=1000).contains(&value) {
+            return Err(e(format!("{name} must be within 0..=1000")));
+        }
+    }
+    if labor.reservation_half_wealth_mills < 1 {
+        return Err(e("reservation_half_wealth_mills must be >= 1".into()));
+    }
+    if !(1..=1000).contains(&labor.bid_fraction_per_mille) {
+        return Err(e("bid_fraction_per_mille must be within 1..=1000".into()));
+    }
+    if labor.work_bias_micro < 0 {
+        return Err(e("work_bias_micro must be >= 0".into()));
+    }
+    if labor.work_ticks == 0 {
+        return Err(e("work_ticks must be >= 1".into()));
+    }
+    if labor.work_need_per_tick < 0 {
+        return Err(e("work_need_per_tick must be >= 0".into()));
+    }
+    if !people
+        .traits
+        .traits
+        .iter()
+        .any(|t| t.id == labor.reservation_trait_id)
+    {
+        return Err(e(format!(
+            "reservation_trait_id `{}` is not a defined trait",
+            labor.reservation_trait_id
+        )));
+    }
+    if !people
+        .needs
+        .needs
+        .iter()
+        .any(|n| n.id == labor.work_need_id)
+    {
+        return Err(e(format!(
+            "work_need_id `{}` is not a defined need",
+            labor.work_need_id
+        )));
     }
     Ok(())
 }

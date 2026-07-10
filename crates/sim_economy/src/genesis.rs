@@ -8,7 +8,9 @@
 //! Seeded stock is likewise recorded in `produced`, so both audit
 //! identities hold from tick 0.
 
-use core_ecs::sim_interface::{EconCounters, FirmBooks, Inventory, Location, RetailOffer, Wallet};
+use core_ecs::sim_interface::{
+    EconCounters, FirmBooks, Inventory, LaborStats, Location, RetailOffer, Wallet,
+};
 use core_ecs::{EcsError, World};
 use core_types::Money;
 
@@ -24,6 +26,8 @@ pub fn populate(world: &mut World, tables: &EconTables) -> Result<(), EcsError> 
     // The escheat wallet (ADR 0007 §8a): unclaimed estates accumulate
     // here, inside the audited wallet sum, until Phase 6's treasury.
     world.insert(ledger, Wallet { cash: Money::ZERO })?;
+    // The labor ledger (ADR 0008 §5), written by each daily clearing.
+    world.insert(ledger, LaborStats::default())?;
 
     let mut seeded_goods: Vec<i64> = vec![0; tables.goods];
     for (kind_index, kind) in tables.firm_kinds.iter().enumerate() {
@@ -64,13 +68,14 @@ pub fn populate(world: &mut World, tables: &EconTables) -> Result<(), EcsError> 
                     expenses: Money::ZERO,
                 },
             )?;
-            if let Some((location_kind, need_index, gain_per_unit, use_ticks)) = kind.retail {
-                world.insert(
-                    firm,
-                    Location {
-                        kind: location_kind,
-                    },
-                )?;
+            // Every firm is a place (ADR 0008 §1): workers commute here.
+            world.insert(
+                firm,
+                Location {
+                    kind: kind.location_kind,
+                },
+            )?;
+            if let Some((need_index, gain_per_unit, use_ticks)) = kind.retail {
                 world.insert(
                     firm,
                     RetailOffer {

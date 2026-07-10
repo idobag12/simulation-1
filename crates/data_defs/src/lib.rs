@@ -93,6 +93,8 @@ pub struct DataDefs {
     pub firms: sim_economy::config::FirmsConfig,
     /// Posted-price market tunables (Phase 4, ADR 0007 §7).
     pub economy: sim_economy::config::EconomyConfig,
+    /// Labor-market tunables (Phase 5, ADR 0008 §7).
+    pub labor: sim_economy::config::LaborConfig,
 }
 
 /// Loads and validates every data definition from a `data/` directory
@@ -117,6 +119,7 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
     let firms: sim_economy::config::FirmsConfig = load_ron(&data_root.join("firms.ron"))?;
     let economy: sim_economy::config::EconomyConfig =
         load_ron(&data_root.join("balance/economy.ron"))?;
+    let labor: sim_economy::config::LaborConfig = load_ron(&data_root.join("balance/labor.ron"))?;
     validate(data_root, &calendar, &engine)?;
     validate_people(data_root, &calendar, &people)?;
     validate_locations(data_root, &locations, &people)?;
@@ -124,6 +127,7 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
     validate_economy(
         data_root, &goods, &recipes, &firms, &economy, &people, &locations,
     )?;
+    validate_labor(data_root, &labor, &people)?;
     Ok(DataDefs {
         calendar,
         engine,
@@ -134,6 +138,7 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
         recipes,
         firms,
         economy,
+        labor,
     })
 }
 
@@ -153,7 +158,7 @@ mod validate;
 mod validate_econ;
 pub use resolve::{resolve_ai, resolve_economy};
 use validate::{validate, validate_ai, validate_locations, validate_people};
-use validate_econ::validate_economy;
+use validate_econ::{validate_economy, validate_labor};
 
 #[cfg(test)]
 #[path = "tests.rs"]

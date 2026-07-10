@@ -2,7 +2,7 @@
 //! (day rate). Explicit order and rates are wired by the application's
 //! schedule builder (SPEC §6).
 
-use core_ecs::sim_interface::{EconCounters, Wallet};
+use core_ecs::sim_interface::{EconCounters, Wallet, WorkingAge};
 use core_ecs::{CommandBuffer, EcsError, Entity, System, TickContext, World};
 use core_rng::RngCore;
 use core_types::Money;
@@ -97,6 +97,53 @@ pub fn validate_town(world: &World, config: &PeopleConfig) -> Result<(), EcsErro
         }
     }
     Ok(())
+}
+
+/// Day-rate system (Phase 5, ADR 0008 §2): stamps [`WorkingAge`]
+/// (shared marker) on citizens who crossed the data-defined threshold —
+/// the labor market's eligibility signal, maintained where age lives.
+/// Age only grows, so the marker is never removed.
+pub struct WorkingAgeSystem {
+    min_working_age_years: u32,
+    ticks_per_year: u64,
+}
+
+impl WorkingAgeSystem {
+    /// Builds from the labor threshold and the calendar's year length.
+    pub fn new(min_working_age_years: u32, ticks_per_year: u64) -> Self {
+        WorkingAgeSystem {
+            min_working_age_years,
+            ticks_per_year,
+        }
+    }
+}
+
+impl System for WorkingAgeSystem {
+    fn name(&self) -> &'static str {
+        "people.working_age"
+    }
+
+    fn run(
+        &mut self,
+        world: &mut World,
+        ctx: &TickContext,
+        _cmd: &mut CommandBuffer,
+    ) -> Result<(), EcsError> {
+        // Pass 1 (immutable): find citizens of age without the marker.
+        let mut newly_of_age: Vec<Entity> = Vec::new();
+        for (entity, identity) in world.iter::<Identity>()? {
+            if identity.age_years(ctx.tick, self.ticks_per_year) >= self.min_working_age_years
+                && world.get::<WorkingAge>(entity)?.is_none()
+            {
+                newly_of_age.push(entity);
+            }
+        }
+        // Pass 2: stamp.
+        for entity in newly_of_age {
+            world.insert(entity, WorkingAge)?;
+        }
+        Ok(())
+    }
 }
 
 /// Day-rate system: each citizen faces their age band's daily death

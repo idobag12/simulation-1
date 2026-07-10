@@ -109,7 +109,8 @@ pub fn load_config(defs: &DataDefs) -> Result<LoadConfig, RunnerError> {
 /// growth bumps `persistence::FORMAT_VERSION` with a list-extension
 /// migration. History: v2 = fixture set; v3 = + people set; v4 = + world/
 /// AI set (Phase 3, ADR 0006 §8); v5 = + economy set (Phase 4,
-/// ADR 0007 §9 — components AND the two economy events).
+/// ADR 0007 §9 — components AND the two economy events); v6 = + labor
+/// set (Phase 5, ADR 0008 §8).
 pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register::<fixture::FixtureWealth>()?;
     world.register::<fixture::FixtureTag>()?;
@@ -131,11 +132,16 @@ pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register::<core_ecs::sim_interface::FirmBooks>()?;
     world.register::<core_ecs::sim_interface::EconCounters>()?;
     world.register::<sim_economy::Production>()?;
+    world.register::<core_ecs::sim_interface::Employment>()?;
+    world.register::<core_ecs::sim_interface::LaborStats>()?;
+    world.register::<core_ecs::sim_interface::WorkingAge>()?;
     world.register_event::<fixture::FixtureChurn>()?;
     world.register_event::<fixture::FixtureAlarm>()?;
     world.register_event::<sim_people::PersonDied>()?;
     world.register_event::<core_ecs::sim_interface::GoodsPurchased>()?;
     world.register_event::<core_ecs::sim_interface::PriceChanged>()?;
+    world.register_event::<core_ecs::sim_interface::Hired>()?;
+    world.register_event::<core_ecs::sim_interface::Fired>()?;
     Ok(())
 }
 
@@ -175,9 +181,12 @@ pub fn derive_spec_from_world(world: &World) -> Result<WorldSpec, EcsError> {
 ///   advance, so a fresh decision starts moving the same tick).
 /// - Hour: econ.production (batches settle before the day's deciding),
 ///   then ai.plan (compile hour only), then needs decay (towns only).
-/// - Day (ADR 0007 §5): debug.audit FIRST (validates yesterday before
-///   today moves anything), then econ.trade, econ.pricing,
-///   goods.spoilage, and mortality last (towns only).
+/// - Day (ADR 0007 §5, ADR 0008 §4): debug.audit FIRST (validates
+///   yesterday before today moves anything), then people.working_age
+///   (today's newly-of-age join the labor force), econ.payroll (wages
+///   paid or firings), econ.labor_market (the daily clearing), then
+///   econ.trade, econ.pricing, goods.spoilage, and mortality last
+///   (towns only).
 ///
 /// The town list is scheduled when the world has citizens OR an economy
 /// (ADR 0007 §8b): firms keep working after the last citizen dies, and
@@ -214,6 +223,21 @@ pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
             Box::new(sim_people::NeedsDecaySystem::new(decays)),
         );
         schedule.add_system(Rate::Day, Box::new(debug_tools::AuditSystem));
+        schedule.add_system(
+            Rate::Day,
+            Box::new(sim_people::WorkingAgeSystem::new(
+                defs.labor.min_working_age_years,
+                ticks_per_year(defs),
+            )),
+        );
+        schedule.add_system(
+            Rate::Day,
+            Box::new(sim_economy::PayrollSystem::new(econ.clone())),
+        );
+        schedule.add_system(
+            Rate::Day,
+            Box::new(sim_economy::LaborMarketSystem::new(econ.clone())),
+        );
         schedule.add_system(
             Rate::Day,
             Box::new(sim_economy::TradeSystem::new(econ.clone())),
@@ -255,6 +279,7 @@ pub fn build_simulation(
             &defs.people,
             spec.citizens,
             ticks_per_year(defs),
+            defs.labor.min_working_age_years,
         )?;
         // World genesis (order fixed: public locations, then homes —
         // deterministic entity indices). Household member lists are read

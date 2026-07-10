@@ -62,6 +62,23 @@ pub enum CurrentAction {
         /// Ticks of consumption left.
         remaining: u32,
     },
+    /// En route to the workplace (Phase 5, ADR 0008 §2; appended
+    /// variants — old saves decode unchanged).
+    WorkTravel {
+        /// The employer's firm entity.
+        target: Entity,
+        /// Ticks of travel left.
+        remaining: u32,
+    },
+    /// On shift at the workplace: presence gates the firm's production
+    /// (derived from `Position`, ADR 0008 §1); the wage comes from the
+    /// daily payroll, never from this act.
+    Work {
+        /// The employer's firm entity.
+        at: Entity,
+        /// Ticks of this work stint left.
+        remaining: u32,
+    },
 }
 
 impl Component for CurrentAction {
@@ -129,6 +146,12 @@ pub enum CandidateAction {
         location: Entity,
         /// Need (data order index) the purchase satisfies.
         need_index: u32,
+    },
+    /// Go work the shift at the employer (appended variant; Phase 5,
+    /// ADR 0008 §2).
+    Work {
+        /// The employer's firm entity.
+        location: Entity,
     },
 }
 

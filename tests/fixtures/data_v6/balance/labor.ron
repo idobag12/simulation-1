@@ -1,0 +1,24 @@
+// Labor-market tunables (SPEC §12; ADR 0008).
+LaborConfig(
+    // One town-wide shift; production happens in staffed hours.
+    shift_start_hour: 9,
+    shift_end_hour: 17,
+    min_working_age_years: 16,
+    // Reservation wage: base, raised by wealth (per-mille of base at
+    // saturation, half strength at half_wealth), discounted by the
+    // trait (per-mille of base at trait 1000).
+    reservation_base_mills: 150,
+    reservation_wealth_per_mille: 300,
+    reservation_half_wealth_mills: 20000,
+    reservation_trait_id: "industriousness",
+    reservation_trait_discount_per_mille: 400,
+    // Firms bid this share of a worker's expected daily marginal product.
+    bid_fraction_per_mille: 600,
+    // The Work candidate's score bias during the shift (micro units).
+    work_bias_micro: 600000,
+    // One work stint; workers re-decide (and usually keep working)
+    // hourly while the shift lasts.
+    work_ticks: 60,
+    work_need_id: "purpose",
+    work_need_per_tick: 1500,
+)

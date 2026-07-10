@@ -8,7 +8,7 @@ RecipesConfig(recipes: [
     RecipeDef(id: "mill_flour",     inputs: [GoodQty(good_id: "grain", quantity: 4)],
               output: GoodQty(good_id: "flour", quantity: 12), batch_hours: 2),
     RecipeDef(id: "bake_bread",     inputs: [GoodQty(good_id: "flour", quantity: 4), GoodQty(good_id: "water", quantity: 4)],
-              output: GoodQty(good_id: "bread", quantity: 16), batch_hours: 2),
+              output: GoodQty(good_id: "bread", quantity: 40), batch_hours: 2),
     RecipeDef(id: "split_firewood", inputs: [GoodQty(good_id: "timber", quantity: 2)],
-              output: GoodQty(good_id: "firewood", quantity: 8), batch_hours: 2),
+              output: GoodQty(good_id: "firewood", quantity: 20), batch_hours: 2),
 ])

@@ -64,6 +64,12 @@ pub fn resolve_ai(defs: &DataDefs) -> sim_ai::AiTables {
         need_trait,
         mu_scale_micro: defs.ai.purchase.mu_scale_micro,
         half_wealth_mills: defs.ai.purchase.half_wealth_mills,
+        work_start_minute: u16::from(defs.labor.shift_start_hour) * 60,
+        work_end_minute: u16::from(defs.labor.shift_end_hour) * 60,
+        work_bias_micro: defs.labor.work_bias_micro,
+        work_ticks: defs.labor.work_ticks,
+        work_need: need_index(&defs.labor.work_need_id),
+        work_need_per_tick: defs.labor.work_need_per_tick,
     }
 }
 
@@ -75,6 +81,14 @@ pub fn resolve_ai(defs: &DataDefs) -> sim_ai::AiTables {
 /// Invariant: only call with a `DataDefs` produced by [`crate::load`];
 /// resolution relies on validation having checked every cross-reference.
 pub fn resolve_economy(defs: &DataDefs) -> sim_economy::EconTables {
+    let trait_index = |id: &str| -> u32 {
+        defs.people
+            .traits
+            .traits
+            .iter()
+            .position(|t| t.id == id)
+            .unwrap_or(0) as u32 // validation guarantees a hit
+    };
     let good_index = |id: &str| -> u32 {
         defs.goods
             .goods
@@ -143,9 +157,11 @@ pub fn resolve_economy(defs: &DataDefs) -> sim_economy::EconTables {
                     initial_cash: core_types::Money::from_mills(firm.initial_cash_mills),
                     initial_inventory,
                     initial_price: core_types::Money::from_mills(firm.initial_price_mills),
+                    location_kind: location_kind_index(&firm.location_kind_id),
+                    positions: firm.positions,
+                    min_workers: firm.min_workers,
                     retail: firm.retail.as_ref().map(|retail| {
                         (
-                            location_kind_index(&retail.location_kind_id),
                             need_index(&retail.need_id),
                             retail.gain_per_unit,
                             retail.use_ticks,
@@ -155,5 +171,16 @@ pub fn resolve_economy(defs: &DataDefs) -> sim_economy::EconTables {
             })
             .collect(),
         economy: defs.economy,
+        labor: sim_economy::config::LaborTables {
+            shift_start_hour: defs.labor.shift_start_hour,
+            shift_end_hour: defs.labor.shift_end_hour,
+            min_working_age_years: defs.labor.min_working_age_years,
+            reservation_base_mills: defs.labor.reservation_base_mills,
+            reservation_wealth_per_mille: defs.labor.reservation_wealth_per_mille,
+            reservation_half_wealth_mills: defs.labor.reservation_half_wealth_mills,
+            reservation_trait: trait_index(&defs.labor.reservation_trait_id),
+            reservation_trait_discount_per_mille: defs.labor.reservation_trait_discount_per_mille,
+            bid_fraction_per_mille: defs.labor.bid_fraction_per_mille,
+        },
     }
 }

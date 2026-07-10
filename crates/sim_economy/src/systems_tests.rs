@@ -4,13 +4,14 @@
 //! suite covers the shock (shortage) side end to end.
 
 use core_ecs::sim_interface::{
-    EconCounters, FirmBooks, GoodsPurchased, Inventory, PriceChanged, RetailOffer, Wallet,
+    EconCounters, Employment, FirmBooks, GoodsPurchased, Inventory, Position, PriceChanged,
+    RetailOffer, Wallet,
 };
 use core_ecs::{CommandBuffer, System, TickContext, World};
 use core_types::{CalendarTime, Money, Seed, Ticks};
 
 use crate::components::{Firm, Production};
-use crate::config::{EconTables, EconomyConfig, FirmKindTable, RecipeTable};
+use crate::config::{EconTables, EconomyConfig, FirmKindTable, LaborTables, RecipeTable};
 
 fn ctx() -> TickContext {
     TickContext {
@@ -46,6 +47,9 @@ fn tables() -> EconTables {
                 initial_cash: Money::from_mills(10_000),
                 initial_inventory: vec![0, 0],
                 initial_price: Money::from_mills(40),
+                location_kind: 0,
+                positions: 2,
+                min_workers: 1,
                 retail: None,
             },
             FirmKindTable {
@@ -54,6 +58,9 @@ fn tables() -> EconTables {
                 initial_cash: Money::from_mills(10_000),
                 initial_inventory: vec![8, 0],
                 initial_price: Money::from_mills(90),
+                location_kind: 1,
+                positions: 2,
+                min_workers: 1,
                 retail: None,
             },
         ],
@@ -64,6 +71,17 @@ fn tables() -> EconTables {
             inventory_target_batches: 3,
             min_price_mills: 1,
             max_price_mills: 5_000,
+        },
+        labor: LaborTables {
+            shift_start_hour: 9,
+            shift_end_hour: 17,
+            min_working_age_years: 16,
+            reservation_base_mills: 150,
+            reservation_wealth_per_mille: 300,
+            reservation_half_wealth_mills: 20_000,
+            reservation_trait: 0,
+            reservation_trait_discount_per_mille: 400,
+            bid_fraction_per_mille: 600,
         },
     }
 }
@@ -77,10 +95,50 @@ fn world_with_firms(tables: &EconTables) -> World {
     world.register::<FirmBooks>().expect("register");
     world.register::<EconCounters>().expect("register");
     world.register::<Production>().expect("register");
+    world
+        .register::<core_ecs::sim_interface::Location>()
+        .expect("register");
+    world
+        .register::<core_ecs::sim_interface::LaborStats>()
+        .expect("register");
+    world.register::<Employment>().expect("register");
+    world.register::<Position>().expect("register");
+    world
+        .register::<core_ecs::sim_interface::Personality>()
+        .expect("register");
+    world
+        .register::<core_ecs::sim_interface::WorkingAge>()
+        .expect("register");
     world.register_event::<GoodsPurchased>().expect("register");
     world.register_event::<PriceChanged>().expect("register");
+    world
+        .register_event::<core_ecs::sim_interface::Hired>()
+        .expect("register");
+    world
+        .register_event::<core_ecs::sim_interface::Fired>()
+        .expect("register");
     crate::genesis::populate(&mut world, tables).expect("genesis");
     world
+}
+
+/// Staffs `firm` with one present worker (a bare employed entity standing
+/// at the firm) so labor-gated production can start (ADR 0008 §1).
+fn staff(world: &mut World, firm: core_ecs::Entity) -> core_ecs::Entity {
+    let worker = world.spawn();
+    world
+        .insert(worker, Wallet { cash: Money::ZERO })
+        .expect("insert");
+    world
+        .insert(
+            worker,
+            Employment {
+                employer: firm,
+                wage_per_day: Money::from_mills(100),
+            },
+        )
+        .expect("insert");
+    world.insert(worker, Position { at: firm }).expect("insert");
+    worker
 }
 
 fn firm_entities(world: &World) -> Vec<core_ecs::Entity> {
@@ -115,6 +173,8 @@ fn production_consumes_inputs_when_starting_and_lands_outputs_counted() {
     let mut world = world_with_firms(&tables);
     let firms = firm_entities(&world);
     let mill = firms[1];
+    staff(&mut world, firms[0]);
+    staff(&mut world, firms[1]);
     let mut system = crate::ProductionSystem::new(tables);
     let mut cmd = CommandBuffer::new();
 
@@ -149,6 +209,8 @@ fn trade_transfers_goods_money_and_books_atomically() {
     let mut world = world_with_firms(&tables);
     let firms = firm_entities(&world);
     let (farm, mill) = (firms[0], firms[1]);
+    staff(&mut world, farm);
+    staff(&mut world, mill);
     // Give the farm sellable grain (through the modeled path: a batch).
     let mut production = crate::ProductionSystem::new(tables.clone());
     let mut cmd = CommandBuffer::new();
@@ -256,6 +318,8 @@ fn trade_is_bounded_by_buyer_cash_and_starved_firms_idle() {
     let mut world = world_with_firms(&tables);
     let firms = firm_entities(&world);
     let (farm, mill) = (firms[0], firms[1]);
+    staff(&mut world, farm);
+    staff(&mut world, mill);
 
     let mut production = crate::ProductionSystem::new(tables.clone());
     let mut cmd = CommandBuffer::new();
@@ -288,4 +352,149 @@ fn trade_is_bounded_by_buyer_cash_and_starved_firms_idle() {
     assert!(mill_wallet.cash >= Money::ZERO, "wallets never go negative");
     let farm_books = world.get::<FirmBooks>(farm).expect("get").expect("some");
     assert_eq!(farm_books.revenue, Money::from_mills(80));
+}
+
+#[test]
+fn unstaffed_firms_never_start_batches() {
+    let tables = tables();
+    let mut world = world_with_firms(&tables);
+    let firms = firm_entities(&world);
+    let mut system = crate::ProductionSystem::new(tables);
+    let mut cmd = CommandBuffer::new();
+    for _ in 0..5 {
+        system.run(&mut world, &ctx(), &mut cmd).expect("run");
+    }
+    for firm in firms {
+        assert!(
+            world.get::<Production>(firm).expect("get").is_none(),
+            "no workers present — no batch (ADR 0008 §1)"
+        );
+    }
+    assert_eq!(counters(&world).produced, vec![8, 0], "seed only");
+}
+
+#[test]
+fn payroll_pays_booked_wages_and_fires_when_the_wallet_runs_dry() {
+    let tables = tables();
+    let mut world = world_with_firms(&tables);
+    let firms = firm_entities(&world);
+    let farm = firms[0];
+    let worker = staff(&mut world, farm);
+    // Wage 100/day against 10_000 cash: pays fine today.
+    let mut payroll = crate::PayrollSystem::new(tables.clone());
+    let mut cmd = CommandBuffer::new();
+    payroll.run(&mut world, &ctx(), &mut cmd).expect("run");
+    assert_eq!(
+        world
+            .get::<Wallet>(worker)
+            .expect("get")
+            .expect("some")
+            .cash,
+        Money::from_mills(100),
+        "the worker got paid (workers spawn cashless here)"
+    );
+    let books = world.get::<FirmBooks>(farm).expect("get").expect("some");
+    assert_eq!(books.expenses, Money::from_mills(100), "payroll is booked");
+
+    // Drain the firm (conserving: park its cash on the worker), then the
+    // next payroll fires instead of paying.
+    let cash = world.get::<Wallet>(farm).expect("get").expect("some").cash;
+    world
+        .get_mut::<Wallet>(farm)
+        .expect("get")
+        .expect("some")
+        .cash = Money::ZERO;
+    let worker_wallet = world.get_mut::<Wallet>(worker).expect("get").expect("some");
+    worker_wallet.cash = worker_wallet.cash.try_add(cash).expect("add");
+    payroll.run(&mut world, &ctx(), &mut cmd).expect("run");
+    assert!(
+        world.get::<Employment>(worker).expect("get").is_none(),
+        "an unpayable wage fires (reason Insolvent)"
+    );
+    world.begin_tick(Ticks::new(1));
+    let fired = world
+        .events::<core_ecs::sim_interface::Fired>()
+        .expect("events");
+    assert_eq!(fired.len(), 1);
+    assert!(matches!(
+        fired[0].reason,
+        core_ecs::sim_interface::FiredReason::Insolvent
+    ));
+}
+
+#[test]
+fn the_daily_clearing_matches_bids_to_asks_and_measures_the_rest() {
+    // One slot per firm: two slots for three seekers — the priciest ask
+    // must stay unmatched (measured, not assigned).
+    let mut tables = tables();
+    tables.firm_kinds[0].positions = 1;
+    tables.firm_kinds[1].positions = 1;
+    let mut world = world_with_firms(&tables);
+    // Three working-age seekers: cheap (industrious, poor), middling, and
+    // one so wealthy the reservation outprices every bid.
+    let mut seekers = Vec::new();
+    for (cash, trait_per_mille) in [(0i64, 900i16), (10_000, 300), (10_000_000, 0)] {
+        let citizen = world.spawn();
+        world
+            .insert(
+                citizen,
+                Wallet {
+                    cash: Money::from_mills(cash),
+                },
+            )
+            .expect("insert");
+        world
+            .insert(
+                citizen,
+                core_ecs::sim_interface::Personality {
+                    weights: vec![trait_per_mille],
+                },
+            )
+            .expect("insert");
+        world
+            .insert(citizen, core_ecs::sim_interface::WorkingAge)
+            .expect("insert");
+        seekers.push(citizen);
+    }
+
+    let mut market = crate::LaborMarketSystem::new(tables);
+    let mut cmd = CommandBuffer::new();
+    market.run(&mut world, &ctx(), &mut cmd).expect("run");
+
+    // Both firms bid (2 slots each, marginal product >> reservations);
+    // the two affordable seekers match, the millionaire stays out.
+    assert!(
+        world.get::<Employment>(seekers[0]).expect("get").is_some(),
+        "the cheapest ask matches first"
+    );
+    assert!(world.get::<Employment>(seekers[1]).expect("get").is_some());
+    assert!(
+        world.get::<Employment>(seekers[2]).expect("get").is_none(),
+        "with no slot left, the priciest ask stays unmatched"
+    );
+    let stats = world
+        .iter::<core_ecs::sim_interface::LaborStats>()
+        .expect("query")
+        .next()
+        .map(|(_, s)| *s)
+        .expect("stats");
+    assert_eq!(stats.working_age, 3);
+    assert_eq!(stats.seeking, 3);
+    assert_eq!(stats.employed, 2);
+    assert_eq!(stats.unmatched, 1);
+    assert_eq!(stats.hires, 2);
+    // Wages: distinct (heterogeneous asks) and within the bid/ask band.
+    let w0 = world
+        .get::<Employment>(seekers[0])
+        .expect("get")
+        .expect("some")
+        .wage_per_day;
+    let w1 = world
+        .get::<Employment>(seekers[1])
+        .expect("get")
+        .expect("some")
+        .wage_per_day;
+    // The best bid pairs with the best ask, so the cheapest seeker
+    // captures the largest surplus — wages genuinely disperse.
+    assert!(w0 != w1, "heterogeneous matches clear at distinct wages");
 }

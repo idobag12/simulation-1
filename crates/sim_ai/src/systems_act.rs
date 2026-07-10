@@ -100,6 +100,40 @@ impl ActSystem {
                 }
             }
             CurrentAction::BuyPending { at } => Transition::Purchase { at },
+            CurrentAction::WorkTravel { target, remaining } => {
+                if remaining > 1 {
+                    Transition::Continue(CurrentAction::WorkTravel {
+                        target,
+                        remaining: remaining - 1,
+                    })
+                } else {
+                    Transition::Arrive {
+                        at: target,
+                        next: CurrentAction::Work {
+                            at: target,
+                            remaining: self.tables.work_ticks,
+                        },
+                    }
+                }
+            }
+            CurrentAction::Work { at, remaining } => {
+                // Working satisfies the data-defined need a little; the
+                // wage comes from payroll, never from the act
+                // (ADR 0008 §2).
+                let next = if remaining > 1 {
+                    Some(CurrentAction::Work {
+                        at,
+                        remaining: remaining - 1,
+                    })
+                } else {
+                    None
+                };
+                Transition::GainAndContinue {
+                    need_index: self.tables.work_need,
+                    amount: self.tables.work_need_per_tick,
+                    next,
+                }
+            }
             CurrentAction::Consume {
                 at,
                 need_index,

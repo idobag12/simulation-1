@@ -41,14 +41,48 @@ pub struct RecipesConfig {
     pub recipes: Vec<RecipeDef>,
 }
 
+/// `data/balance/labor.ron` (Phase 5, ADR 0008 §7): the shift, the
+/// labor-force threshold, and the market's reservation/bid tunables.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LaborConfig {
+    /// Shift start hour (0..24).
+    pub shift_start_hour: u8,
+    /// Shift end hour (0..24; must be after start — no overnight shifts
+    /// this phase).
+    pub shift_end_hour: u8,
+    /// Minimum age (world years) to enter the labor force.
+    pub min_working_age_years: u32,
+    /// Reservation-wage base, mills/day.
+    pub reservation_base_mills: i64,
+    /// How much wealth raises the reservation, per-mille of base at
+    /// saturation: ask += base × per_mille/1000 × wallet/(wallet+half).
+    pub reservation_wealth_per_mille: i64,
+    /// Wealth (mills) at which the raise reaches half strength.
+    pub reservation_half_wealth_mills: i64,
+    /// Trait (from `traits.ron`) that lowers the reservation.
+    pub reservation_trait_id: String,
+    /// Discount at full trait, per-mille of base.
+    pub reservation_trait_discount_per_mille: i64,
+    /// The share of a worker's daily marginal product a firm bids,
+    /// per-mille.
+    pub bid_fraction_per_mille: i64,
+    /// Score bias for the Work candidate during the shift, micro units.
+    pub work_bias_micro: i64,
+    /// Length of one work stint, ticks.
+    pub work_ticks: u32,
+    /// Need id (from `needs.ron`) working satisfies.
+    pub work_need_id: String,
+    /// Per-tick per-million gain of that need while working.
+    pub work_need_per_tick: i64,
+}
+
 /// A firm kind's retail block (ADR 0007 §6): present on the kinds whose
 /// firms sell to citizens. The firm entity carries `Location` (of
 /// `location_kind_id`) and a `RetailOffer` built from this.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RetailDef {
-    /// The location kind (from `data/locations.ron`) this firm appears as.
-    pub location_kind_id: String,
     /// The need (from `data/balance/needs.ron`) one unit satisfies.
     pub need_id: String,
     /// Need satisfaction per unit, per-million.
@@ -73,6 +107,14 @@ pub struct FirmDef {
     pub initial_inventory: Vec<GoodQty>,
     /// Opening posted price for the output good, in mills (≥ 1).
     pub initial_price_mills: i64,
+    /// The location kind (from `data/locations.ron`) every instance
+    /// appears as (Phase 5, ADR 0008 §1: every firm is a place).
+    pub location_kind_id: String,
+    /// Worker slots per instance (≥ 1).
+    pub positions: u32,
+    /// Workers that must be present for a batch to start
+    /// (1 ≤ min_workers ≤ positions).
+    pub min_workers: u32,
     /// Present iff this kind retails to citizens.
     pub retail: Option<RetailDef>,
 }
@@ -134,9 +176,39 @@ pub struct FirmKindTable {
     pub initial_inventory: Vec<i64>,
     /// Opening posted price.
     pub initial_price: Money,
-    /// Retail block, resolved: `(location kind, need index, gain,
-    /// use_ticks)`.
-    pub retail: Option<(u32, u32, i64, u32)>,
+    /// Location kind every instance appears as (Phase 5).
+    pub location_kind: u32,
+    /// Worker slots per instance.
+    pub positions: u32,
+    /// Workers required present to start a batch.
+    pub min_workers: u32,
+    /// Retail block, resolved: `(need index, gain, use_ticks)` — the
+    /// place is the firm's own `location_kind` (Phase 5: every firm is a
+    /// place).
+    pub retail: Option<(u32, i64, u32)>,
+}
+
+/// Resolved labor tunables (Phase 5): string ids replaced by indices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LaborTables {
+    /// Shift start hour.
+    pub shift_start_hour: u8,
+    /// Shift end hour.
+    pub shift_end_hour: u8,
+    /// Labor-force age threshold, world years.
+    pub min_working_age_years: u32,
+    /// Reservation base, mills/day.
+    pub reservation_base_mills: i64,
+    /// Wealth raise at saturation, per-mille of base.
+    pub reservation_wealth_per_mille: i64,
+    /// Half-strength wealth, mills.
+    pub reservation_half_wealth_mills: i64,
+    /// Trait index (data order) discounting the reservation.
+    pub reservation_trait: u32,
+    /// Full-trait discount, per-mille of base.
+    pub reservation_trait_discount_per_mille: i64,
+    /// Bid share of marginal product, per-mille.
+    pub bid_fraction_per_mille: i64,
 }
 
 /// The resolved, index-based tables the economy systems and genesis run
@@ -154,4 +226,6 @@ pub struct EconTables {
     pub firm_kinds: Vec<FirmKindTable>,
     /// Pricing/procurement tunables.
     pub economy: EconomyConfig,
+    /// Labor-market tunables (Phase 5).
+    pub labor: LaborTables,
 }

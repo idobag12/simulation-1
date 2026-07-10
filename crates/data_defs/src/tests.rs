@@ -48,9 +48,17 @@ const GOOD_RECIPES: &str = r#"RecipesConfig(recipes: [
 const GOOD_FIRMS: &str = r#"FirmsConfig(kinds: [
         FirmDef(id: "bakery", count: 1, recipe_id: "bake", initial_cash_mills: 1000,
             initial_inventory: [GoodQty(good_id: "bread", quantity: 8)], initial_price_mills: 50,
-            retail: Some(RetailDef(location_kind_id: "shop", need_id: "hunger",
-                gain_per_unit: 100000, use_ticks: 5))),
+            location_kind_id: "shop", positions: 2, min_workers: 1,
+            retail: Some(RetailDef(need_id: "hunger", gain_per_unit: 100000, use_ticks: 5))),
     ])"#;
+const GOOD_LABOR: &str = r#"LaborConfig(
+        shift_start_hour: 9, shift_end_hour: 17, min_working_age_years: 16,
+        reservation_base_mills: 150, reservation_wealth_per_mille: 300,
+        reservation_half_wealth_mills: 20000, reservation_trait_id: "ambition",
+        reservation_trait_discount_per_mille: 400, bid_fraction_per_mille: 600,
+        work_bias_micro: 600000, work_ticks: 60, work_need_id: "hunger",
+        work_need_per_tick: 1000,
+    )"#;
 const GOOD_ECONOMY: &str = r#"EconomyConfig(
         markup_per_mille: 300, overhead_mills_per_batch: 100,
         controller_step_per_mille: 50, inventory_target_batches: 10,
@@ -90,6 +98,7 @@ fn write_tree(overrides: &[(&str, &str)]) -> PathBuf {
         ("recipes.ron", GOOD_RECIPES),
         ("firms.ron", GOOD_FIRMS),
         ("balance/economy.ron", GOOD_ECONOMY),
+        ("balance/labor.ron", GOOD_LABOR),
     ];
     for (rel, content) in base {
         let path = root.join(rel);
@@ -131,8 +140,14 @@ fn valid_data_loads() {
     let bakery = &econ.firm_kinds[0];
     assert_eq!(bakery.initial_inventory, vec![8]);
     assert_eq!(bakery.initial_cash.mills(), 1000);
-    // Retail resolves to (location kind 2 = shop, need 0 = hunger).
-    assert_eq!(bakery.retail, Some((2, 0, 100000, 5)));
+    assert_eq!(bakery.location_kind, 2, "shop is location kind 2");
+    assert_eq!((bakery.positions, bakery.min_workers), (2, 1));
+    // Retail resolves to (need 0 = hunger, gain, use_ticks).
+    assert_eq!(bakery.retail, Some((0, 100000, 5)));
+    assert_eq!(econ.labor.shift_start_hour, 9);
+    assert_eq!(econ.labor.reservation_trait, 0, "ambition is trait 0");
+    assert_eq!(tables.work_start_minute, 9 * 60);
+    assert_eq!(tables.work_need, 0);
 }
 
 /// ADR 0007 §7: seeded errors across goods/recipes/firms/economy are
@@ -169,7 +184,7 @@ fn economy_validation_catches_seeded_errors() {
         other => panic!("expected Validation error, got {other:?}"),
     }
 
-    // A retail location kind that world genesis would also instantiate.
+    // A firm's location kind that world genesis would also instantiate.
     let root = write_tree(&[(
         "locations.ron",
         r#"LocationsConfig(kinds: [
@@ -182,6 +197,42 @@ fn economy_validation_catches_seeded_errors() {
     match load(&root) {
         Err(DataError::Validation { message, .. }) => {
             assert!(message.contains("count 0"), "{message}");
+        }
+        other => panic!("expected Validation error, got {other:?}"),
+    }
+
+    // min_workers above positions.
+    let root = write_tree(&[(
+        "firms.ron",
+        r#"FirmsConfig(kinds: [
+            FirmDef(id: "bakery", count: 1, recipe_id: "bake", initial_cash_mills: 1000,
+                initial_inventory: [], initial_price_mills: 50,
+                location_kind_id: "shop", positions: 2, min_workers: 3,
+                retail: None),
+        ])"#,
+    )]);
+    match load(&root) {
+        Err(DataError::Validation { message, .. }) => {
+            assert!(message.contains("min_workers"), "{message}");
+        }
+        other => panic!("expected Validation error, got {other:?}"),
+    }
+
+    // Labor: an overnight shift is rejected.
+    let root = write_tree(&[(
+        "balance/labor.ron",
+        r#"LaborConfig(
+            shift_start_hour: 20, shift_end_hour: 4, min_working_age_years: 16,
+            reservation_base_mills: 150, reservation_wealth_per_mille: 300,
+            reservation_half_wealth_mills: 20000, reservation_trait_id: "ambition",
+            reservation_trait_discount_per_mille: 400, bid_fraction_per_mille: 600,
+            work_bias_micro: 600000, work_ticks: 60, work_need_id: "hunger",
+            work_need_per_tick: 1000,
+        )"#,
+    )]);
+    match load(&root) {
+        Err(DataError::Validation { message, .. }) => {
+            assert!(message.contains("shift_start_hour"), "{message}");
         }
         other => panic!("expected Validation error, got {other:?}"),
     }

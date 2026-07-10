@@ -341,7 +341,7 @@ fn cli_resume_without_flags_matches_uninterrupted_run() {
     std::fs::create_dir_all(&dir).expect("mkdir");
     let save = dir.join("resume.embersave");
     let save_str = save.to_str().expect("utf8");
-    let data = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/data_v5");
+    let data = concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures/data_v6");
 
     let arg = |v: &[&str]| -> Vec<String> {
         let mut a: Vec<String> = v.iter().map(|s| (*s).to_owned()).collect();

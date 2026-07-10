@@ -13,7 +13,8 @@ use crate::store::{Component, StorageKind};
 #[path = "sim_interface_econ.rs"]
 mod econ;
 pub use econ::{
-    EconCounters, FirmBooks, GoodsPurchased, Inventory, PriceChanged, RetailOffer, Wallet,
+    EconCounters, Employment, Fired, FiredReason, FirmBooks, GoodsPurchased, Hired, Inventory,
+    LaborStats, PriceChanged, RetailOffer, Wallet,
 };
 
 /// One need level in per-million units (ADR 0005 §2): 0 = fully depleted,
@@ -136,6 +137,19 @@ impl Component for Residence {
     const NAME: &'static str = "world.residence";
     // Dense: every citizen carries it.
     const STORAGE: StorageKind = StorageKind::Dense;
+}
+
+/// Marks a citizen as at-or-above working age (Phase 5, ADR 0008 §2):
+/// maintained by `sim_people` (stamped at genesis, promoted on the
+/// birthday crossing the data-defined threshold), read by the labor
+/// market — age itself stays in `sim_people`'s `Identity` (SPEC §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkingAge;
+
+impl Component for WorkingAge {
+    const NAME: &'static str = "people.working_age";
+    // Sparse: a subset of citizens.
+    const STORAGE: StorageKind = StorageKind::Sparse;
 }
 
 #[cfg(test)]

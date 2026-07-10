@@ -4,7 +4,8 @@
 //! exact integer effects.
 
 use core_ecs::sim_interface::{
-    Inventory, Location, NeedLevel, Needs, Personality, Position, Residence, RetailOffer, Wallet,
+    Employment, Inventory, Location, NeedLevel, Needs, Personality, Position, Residence,
+    RetailOffer, Wallet,
 };
 use core_ecs::{CommandBuffer, EcsError, Entity, System, TickContext, World};
 use core_types::Ticks;
@@ -31,6 +32,8 @@ struct Decider {
     home: Option<Entity>,
     asleep_window: bool,
     cash_mills: i64,
+    /// The employer, when the citizen holds a job (Phase 5).
+    workplace: Option<Entity>,
 }
 
 /// One retail offer snapshotted for scoring: the selling entity, the
@@ -225,16 +228,34 @@ impl DecideSystem {
             - money_cost
     }
 
+    /// Scores going to work (Phase 5, ADR 0008 §2): a flat data-defined
+    /// bias during the shift, less time cost — strong enough to shape the
+    /// day, weak enough that urgent needs still win (obligations bias,
+    /// never dictate).
+    fn score_work(&self, decider: &Decider, workplace: Entity) -> f64 {
+        let travel_ticks = if decider.at == Some(workplace) {
+            0
+        } else {
+            i64::from(self.tables.travel_ticks)
+        };
+        let time_cost = (travel_ticks + i64::from(self.tables.work_ticks)) as f64
+            * self.tables.time_cost_micro_per_tick as f64
+            / MICRO;
+        self.tables.work_bias_micro as f64 / MICRO - time_cost
+    }
+
     /// Enumerates and scores a decider's candidates; returns the dump and
     /// the chosen action. Enumeration order (= tie-break order, SPEC §11):
     /// own home (satisfier data order), public locations (entity order ×
-    /// satisfier data order), purchases (retail-entity order), Idle last.
+    /// satisfier data order), purchases (retail-entity order), the work
+    /// obligation (shift hours only), Idle last.
     fn decide(
         &self,
         decider: &Decider,
         publics: &[(Entity, u32)],
         offers: &[OfferSnapshot],
         home_kind: Option<u32>,
+        work_window: bool,
     ) -> (LastDecision, CurrentAction) {
         let mut candidates: Vec<ScoredCandidate> = Vec::new();
         let mut scores: Vec<f64> = Vec::new();
@@ -294,6 +315,16 @@ impl DecideSystem {
             });
             scores.push(score);
         }
+        if work_window && let Some(workplace) = decider.workplace {
+            let score = self.score_work(decider, workplace);
+            candidates.push(ScoredCandidate {
+                action: CandidateAction::Work {
+                    location: workplace,
+                },
+                score_micro: quantize(score),
+            });
+            scores.push(score);
+        }
         candidates.push(ScoredCandidate {
             action: CandidateAction::Idle,
             score_micro: 0,
@@ -335,6 +366,19 @@ impl DecideSystem {
                     CurrentAction::BuyPending { at: location }
                 } else {
                     CurrentAction::BuyTravel {
+                        target: location,
+                        remaining: self.tables.travel_ticks,
+                    }
+                }
+            }
+            CandidateAction::Work { location } => {
+                if decider.at == Some(location) {
+                    CurrentAction::Work {
+                        at: location,
+                        remaining: self.tables.work_ticks,
+                    }
+                } else {
+                    CurrentAction::WorkTravel {
                         target: location,
                         remaining: self.tables.travel_ticks,
                     }
@@ -437,12 +481,18 @@ impl System for DecideSystem {
                     .get::<Wallet>(entity)?
                     .map(|wallet| wallet.cash.mills())
                     .unwrap_or(0),
+                workplace: world
+                    .get::<Employment>(entity)?
+                    .map(|employment| employment.employer),
             });
         }
+        let work_window = minute_of_day >= self.tables.work_start_minute
+            && minute_of_day < self.tables.work_end_minute;
 
         // Pass 2: decide and write (entity order preserved).
         for decider in deciders {
-            let (mut dump, action) = self.decide(&decider, &publics, &offers, home_kind);
+            let (mut dump, action) =
+                self.decide(&decider, &publics, &offers, home_kind, work_window);
             dump.tick = ctx.tick;
             world.insert(decider.entity, action)?;
             world.insert(decider.entity, dump)?;

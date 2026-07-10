@@ -11,7 +11,7 @@ EconomyConfig(
     controller_step_per_mille: 50,
     // Stock target in batches of output: above → cut, below → raise.
     // Doubles as the firm-to-firm procurement fill target for inputs.
-    inventory_target_batches: 15,
+    inventory_target_batches: 6,
     // Absolute posted-price bounds, mills.
     min_price_mills: 1,
     max_price_mills: 5000,

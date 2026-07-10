@@ -22,4 +22,4 @@ pub mod systems;
 
 pub use components::{Household, HouseholdMember, Identity, NeedLevel, Needs, Personality, Sex};
 pub use events::{DeathCause, PersonDied};
-pub use systems::{MortalitySystem, NeedsDecaySystem, validate_town};
+pub use systems::{MortalitySystem, NeedsDecaySystem, WorkingAgeSystem, validate_town};

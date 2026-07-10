@@ -4,7 +4,8 @@
 //! the same call (ADR 0007 §4).
 
 use core_ecs::sim_interface::{
-    EconCounters, FirmBooks, GoodsPurchased, Inventory, PriceChanged, RetailOffer, Wallet,
+    EconCounters, Employment, FirmBooks, GoodsPurchased, Inventory, Position, PriceChanged,
+    RetailOffer, Wallet,
 };
 use core_ecs::{CommandBuffer, EcsError, Entity, System, TickContext, World};
 use core_types::{ArithmeticError, Money};
@@ -122,6 +123,11 @@ fn count(
 /// start one by consuming inputs from the firm's own stock
 /// (`consumed_in_production` counts). A firm that finishes this hour
 /// starts its next batch next hour.
+///
+/// Phase 5 (ADR 0008 §1): starting a batch also requires the kind's
+/// `min_workers` employees PRESENT this hour — an employee counts as
+/// present when their `Position` is the firm entity. Labor gates starts,
+/// not completions; understaffed firms idle honestly.
 pub struct ProductionSystem {
     tables: EconTables,
 }
@@ -147,18 +153,25 @@ impl System for ProductionSystem {
         let Some(ledger) = world.iter::<EconCounters>()?.next().map(|(e, _)| e) else {
             return Ok(()); // no economy in this world (migrated pre-v5 town)
         };
-        // Pass 1 (immutable): snapshot every firm's state in entity order.
-        let firms: Vec<(Entity, u32, Option<u32>)> = {
+        // Pass 1 (immutable): snapshot every firm's state in entity
+        // order, plus the hour's worker presence (ADR 0008 §1).
+        let mut present: std::collections::BTreeMap<u32, u32> = std::collections::BTreeMap::new();
+        for (citizen, employment) in world.iter::<Employment>()? {
+            if world.get::<Position>(citizen)?.map(|p| p.at) == Some(employment.employer) {
+                *present.entry(employment.employer.index()).or_insert(0) += 1;
+            }
+        }
+        let firms: Vec<(Entity, u32, u32, Option<u32>)> = {
             let mut list = Vec::new();
             for (entity, firm) in world.iter::<Firm>()? {
                 let running = world.get::<Production>(entity)?.map(|p| p.remaining_hours);
-                list.push((entity, firm.recipe, running));
+                list.push((entity, firm.kind, firm.recipe, running));
             }
             list
         };
 
         // Pass 2: apply, same order.
-        for (entity, recipe_index, running) in firms {
+        for (entity, kind_index, recipe_index, running) in firms {
             let recipe = self
                 .tables
                 .recipes
@@ -190,7 +203,17 @@ impl System for ProductionSystem {
                     }
                 }
                 None => {
-                    // Start a batch if every input is in stock.
+                    // Start a batch if the shift is staffed and every
+                    // input is in stock.
+                    let min_workers = self
+                        .tables
+                        .firm_kinds
+                        .get(kind_index as usize)
+                        .map(|kind| kind.min_workers)
+                        .unwrap_or(u32::MAX);
+                    if present.get(&entity.index()).copied().unwrap_or(0) < min_workers {
+                        continue;
+                    }
                     let can_start = {
                         let Some(inventory) = world.get::<Inventory>(entity)? else {
                             continue;

@@ -122,6 +122,20 @@ pub struct AiTables {
     pub mu_scale_micro: i64,
     /// See [`PurchaseDef::half_wealth_mills`].
     pub half_wealth_mills: i64,
+    /// Work shift start, minutes of day (Phase 5, from
+    /// `data/balance/labor.ron` via `data_defs::resolve_ai`).
+    pub work_start_minute: u16,
+    /// Work shift end, minutes of day.
+    pub work_end_minute: u16,
+    /// Score bias for the Work candidate during the shift (micro units;
+    /// obligations bias, they don't dictate — ADR 0008 §2).
+    pub work_bias_micro: i64,
+    /// Length of one work stint, ticks.
+    pub work_ticks: u32,
+    /// Need (data order) working satisfies.
+    pub work_need: u32,
+    /// Per-tick per-million gain of that need while working.
+    pub work_need_per_tick: i64,
 }
 
 impl AiTables {

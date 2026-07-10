@@ -19,10 +19,13 @@
 pub mod components;
 pub mod config;
 pub mod genesis;
+pub mod labor;
 pub mod systems;
 
 pub use components::{Firm, Production};
 pub use config::{
-    EconTables, EconomyConfig, FirmDef, FirmsConfig, GoodQty, RecipeDef, RecipesConfig, RetailDef,
+    EconTables, EconomyConfig, FirmDef, FirmsConfig, GoodQty, LaborConfig, LaborTables, RecipeDef,
+    RecipesConfig, RetailDef,
 };
+pub use labor::{LaborMarketSystem, PayrollSystem};
 pub use systems::{PricingSystem, ProductionSystem, TradeSystem};

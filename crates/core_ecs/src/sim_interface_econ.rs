@@ -164,6 +164,87 @@ impl crate::Event for GoodsPurchased {
     const NAME: &'static str = "econ.goods_purchased";
 }
 
+/// A citizen's job (Phase 5, ADR 0008 §2): who employs them and at what
+/// cleared daily wage. Created by the labor market, removed by firing.
+/// Shared: `sim_economy` clears/pays/fires, `sim_ai` works the shift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Employment {
+    /// The employing firm entity.
+    pub employer: Entity,
+    /// The wage the daily payroll pays, in mills.
+    pub wage_per_day: Money,
+}
+
+impl Component for Employment {
+    const NAME: &'static str = "econ.employment";
+    // Sparse: a minority of citizens hold jobs in small towns.
+    const STORAGE: StorageKind = StorageKind::Sparse;
+}
+
+/// The labor ledger (Phase 5, ADR 0008 §5), carried by the ledger entity
+/// beside `EconCounters`: written by each daily clearing; unemployment is
+/// measured from it by observers, never assigned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct LaborStats {
+    /// Citizens at or above working age at the last clearing.
+    pub working_age: u32,
+    /// Citizens holding a job after the last clearing.
+    pub employed: u32,
+    /// Citizens who asked (searched) at the last clearing.
+    pub seeking: u32,
+    /// Seekers the clearing could not match.
+    pub unmatched: u32,
+    /// Lifetime hires.
+    pub hires: u64,
+    /// Lifetime firings.
+    pub firings: u64,
+}
+
+impl Component for LaborStats {
+    const NAME: &'static str = "econ.labor_stats";
+    // Sparse: exactly one instance.
+    const STORAGE: StorageKind = StorageKind::Sparse;
+}
+
+/// A hire happened at the daily clearing (a fact; ADR 0008 §3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hired {
+    /// The new employee.
+    pub citizen: Entity,
+    /// The employing firm.
+    pub employer: Entity,
+    /// The cleared daily wage.
+    pub wage_per_day: Money,
+}
+
+impl crate::Event for Hired {
+    const NAME: &'static str = "econ.hired";
+}
+
+/// Why an employment ended (ADR 0008 §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FiredReason {
+    /// The firm could not cover the wage.
+    Insolvent,
+    /// The firm held more employees than positions.
+    Redundant,
+}
+
+/// An employment ended (a fact; ADR 0008 §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Fired {
+    /// The former employee.
+    pub citizen: Entity,
+    /// The firm that let them go.
+    pub employer: Entity,
+    /// Why.
+    pub reason: FiredReason,
+}
+
+impl crate::Event for Fired {
+    const NAME: &'static str = "econ.fired";
+}
+
 /// A firm's posted price moved (emitted by pricing when new ≠ old).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PriceChanged {

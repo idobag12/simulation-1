@@ -33,11 +33,16 @@ fn in_range(value: u64, min: u64, max: u64) -> u64 {
 /// that the FINAL household absorbs however many citizens remain and may
 /// therefore be smaller than `household_min` (documented on
 /// `DemographicsConfig`; e.g. 10 citizens with sizes 4,4 leave a tail of 2).
+/// `min_working_age_years` comes from `data/balance/labor.ron` (Phase 5,
+/// ADR 0008 §2): citizens already of age are stamped `WorkingAge` at
+/// creation; younger ones are promoted by `WorkingAgeSystem` on the
+/// birthday they cross the threshold.
 pub fn populate(
     world: &mut World,
     config: &PeopleConfig,
     count: u32,
     ticks_per_year: u64,
+    min_working_age_years: u32,
 ) -> Result<(), EcsError> {
     let mut remaining = count;
     while remaining > 0 {
@@ -55,7 +60,13 @@ pub fn populate(
         let household_entity = world.spawn();
         let mut members: Vec<Entity> = Vec::with_capacity(size as usize);
         for _ in 0..size {
-            let citizen = spawn_citizen(world, config, &family_name, ticks_per_year)?;
+            let citizen = spawn_citizen(
+                world,
+                config,
+                &family_name,
+                ticks_per_year,
+                min_working_age_years,
+            )?;
             world.insert(
                 citizen,
                 HouseholdMember {
@@ -84,6 +95,7 @@ fn spawn_citizen(
     config: &PeopleConfig,
     family_name: &str,
     ticks_per_year: u64,
+    min_working_age_years: u32,
 ) -> Result<Entity, EcsError> {
     // Sex.
     let sex_draw = world.rng(GENESIS_STREAM).next_u64();
@@ -151,6 +163,9 @@ fn spawn_citizen(
     world.insert(citizen, Needs { levels })?;
     world.insert(citizen, Personality { weights })?;
     world.insert(citizen, core_ecs::sim_interface::Wallet { cash })?;
+    if age_years >= u64::from(min_working_age_years) {
+        world.insert(citizen, core_ecs::sim_interface::WorkingAge)?;
+    }
     Ok(citizen)
 }
 

@@ -81,6 +81,16 @@ fn citizen_report(
     {
         out.push_str(&format!("wallet: {}\n", wallet.cash));
     }
+    if let Some(employment) = world
+        .get::<core_ecs::sim_interface::Employment>(entity)
+        .map_err(err)?
+    {
+        out.push_str(&format!(
+            "job: {} at {} per day\n",
+            location_label(world, defs, employment.employer)?,
+            employment.wage_per_day
+        ));
+    }
     if let Some(member) = world
         .get::<sim_people::HouseholdMember>(entity)
         .map_err(err)?
@@ -175,6 +185,14 @@ fn activity_report(world: &World, defs: &DataDefs, entity: Entity) -> Result<Str
                 need_name(defs, *need_index),
                 location_label(world, defs, *at)?,
             ),
+            sim_ai::CurrentAction::WorkTravel { target, remaining } => format!(
+                "doing: commuting to {} ({remaining} ticks left)\n",
+                location_label(world, defs, *target)?,
+            ),
+            sim_ai::CurrentAction::Work { at, remaining } => format!(
+                "doing: working at {} ({remaining} ticks left in the stint)\n",
+                location_label(world, defs, *at)?,
+            ),
         };
         out.push_str(&line);
     }
@@ -208,6 +226,9 @@ fn activity_report(world: &World, defs: &DataDefs, entity: Entity) -> Result<Str
                     need_name(defs, need_index),
                     location_label(world, defs, location)?
                 ),
+                sim_ai::CandidateAction::Work { location } => {
+                    format!("work at {}", location_label(world, defs, location)?)
+                }
             };
             out.push_str(&format!(
                 " {marker} {what}: {} micro\n",
@@ -359,6 +380,22 @@ pub fn economy(sim: &Simulation, defs: &DataDefs) -> Result<String, String> {
                 counters.spoiled.get(good).copied().unwrap_or(0),
             ));
         }
+    }
+    if let Some((_, stats)) = world
+        .iter::<core_ecs::sim_interface::LaborStats>()
+        .map_err(err)?
+        .next()
+    {
+        out.push_str(&format!(
+            "labor: {} working-age, {} employed, {} sought, {} unmatched \
+             (lifetime {} hires / {} firings)\n",
+            stats.working_age,
+            stats.employed,
+            stats.seeking,
+            stats.unmatched,
+            stats.hires,
+            stats.firings,
+        ));
     }
     match debug_tools::audit_economy(world) {
         Ok(true) => out.push_str("audit: PASS\n"),

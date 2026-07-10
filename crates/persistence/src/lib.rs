@@ -38,8 +38,9 @@ use thiserror::Error;
 /// v3 = Phase 2 (+ people registrations — ADR 0005 §9: appending
 /// registrations is a format bump with a list-extension migration);
 /// v4 = Phase 3 (+ world/AI registrations, ADR 0006 §8);
-/// v5 = Phase 4 (+ economy registrations and events, ADR 0007 §9).
-pub const FORMAT_VERSION: u32 = 5;
+/// v5 = Phase 4 (+ economy registrations and events, ADR 0007 §9);
+/// v6 = Phase 5 (+ labor registrations and events, ADR 0008 §8).
+pub const FORMAT_VERSION: u32 = 6;
 
 /// 8-byte file magic identifying an Embervale save.
 pub const MAGIC: &[u8; 8] = b"EMBRSAV1";
@@ -82,7 +83,7 @@ pub enum PersistError {
     Ecs(#[from] EcsError),
 }
 
-/// The full serialized world state (SPEC §9), current format (v5).
+/// The full serialized world state (SPEC §9), current format (v6).
 /// Everything a running simulation is, minus the schedule and calendar,
 /// which the application reconstructs exactly as it reconstructs
 /// registrations.

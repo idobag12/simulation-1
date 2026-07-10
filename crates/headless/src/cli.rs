@@ -216,9 +216,11 @@ fn cmd_run(flags: &Flags) -> Result<bool, String> {
 }
 
 /// Like `runner::run_with_hashes`, additionally appending one CSV row per
-/// simulated day: `tick,population,deaths_total` (SPEC §13 time-series;
-/// ADR 0005 §7). Death counting observes `PersonDied` events from outside
-/// the simulation — an observer, not a system.
+/// simulated day: `tick,population,deaths_total,employed,seeking,unmatched`
+/// (SPEC §13 time-series; ADR 0005 §7, ADR 0008 §5). Death counting
+/// observes `PersonDied` events from outside the simulation — an
+/// observer, not a system; the labor columns read the clearing's
+/// measured `LaborStats`.
 fn run_with_stats(
     sim: &mut sim_time::Simulation,
     schedule: &mut core_ecs::Schedule,
@@ -227,7 +229,11 @@ fn run_with_stats(
     csv_path: &std::path::Path,
 ) -> Result<runner::HashSequence, String> {
     let mut csv = std::fs::File::create(csv_path).map_err(|e| e.to_string())?;
-    writeln!(csv, "tick,population,deaths_total").map_err(|e| e.to_string())?;
+    writeln!(
+        csv,
+        "tick,population,deaths_total,employed,seeking,unmatched"
+    )
+    .map_err(|e| e.to_string())?;
     let mut deaths_total: u64 = 0;
     let mut hashes = Vec::new();
     for _ in 0..ticks {
@@ -246,8 +252,22 @@ fn run_with_stats(
             .is_multiple_of(core_types::calendar::TICKS_PER_DAY)
         {
             let population = inspect::population(sim.world()).map_err(|e| e.to_string())?;
-            writeln!(csv, "{},{population},{deaths_total}", sim.tick())
-                .map_err(|e| e.to_string())?;
+            let labor = sim
+                .world()
+                .iter::<core_ecs::sim_interface::LaborStats>()
+                .map_err(|e| e.to_string())?
+                .next()
+                .map(|(_, stats)| *stats)
+                .unwrap_or_default();
+            writeln!(
+                csv,
+                "{},{population},{deaths_total},{},{},{}",
+                sim.tick(),
+                labor.employed,
+                labor.seeking,
+                labor.unmatched
+            )
+            .map_err(|e| e.to_string())?;
         }
     }
     hashes.push((sim.tick(), sim.state_hash().map_err(|e| e.to_string())?));
@@ -469,7 +489,7 @@ mod tests {
         );
         // Stats CSV has a header + at least two day rows (3000 ticks > 2 days).
         let stats = std::fs::read_to_string(&csv).unwrap();
-        assert!(stats.starts_with("tick,population,deaths_total"));
+        assert!(stats.starts_with("tick,population,deaths_total,employed,seeking,unmatched"));
         assert!(stats.lines().count() >= 3, "{stats}");
 
         assert_eq!(
