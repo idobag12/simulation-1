@@ -18,8 +18,6 @@ use crate::config::AiTables;
 // scale), not tunables.
 pub(crate) const NEED_MAX: i64 = NeedLevel::MAX.raw();
 const MICRO: f64 = 1_000_000.0;
-/// Minutes in a day, u16 (definitional; 24 × 60).
-const DAY_MINUTES: u16 = (24 * MINUTES_PER_HOUR) as u16;
 
 /// Everything scoring needs about one deciding citizen, snapshotted so
 /// the scoring pass borrows nothing (two-pass pattern; SPEC §6 forbids
