@@ -140,6 +140,7 @@ pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register::<core_ecs::sim_interface::Ownership>()?;
     world.register::<core_ecs::sim_interface::Tenancy>()?;
     world.register::<core_ecs::sim_interface::BorrowerStatus>()?;
+    world.register::<core_ecs::sim_interface::HousingBook>()?;
     world.register_event::<fixture::FixtureChurn>()?;
     world.register_event::<fixture::FixtureAlarm>()?;
     world.register_event::<sim_people::PersonDied>()?;

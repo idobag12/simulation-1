@@ -9,8 +9,8 @@
 //! identities hold from tick 0.
 
 use core_ecs::sim_interface::{
-    BankBook, EconCounters, FirmBooks, Inventory, LaborStats, Location, RetailOffer, TreasuryBook,
-    Wallet,
+    BankBook, EconCounters, FirmBooks, HousingBook, Inventory, LaborStats, Location, RetailOffer,
+    TreasuryBook, Wallet,
 };
 use core_ecs::{EcsError, World};
 use core_types::Money;
@@ -29,6 +29,9 @@ pub fn populate(world: &mut World, tables: &EconTables) -> Result<(), EcsError> 
     world.insert(ledger, Wallet { cash: Money::ZERO })?;
     // The labor ledger (ADR 0008 §5), written by each daily clearing.
     world.insert(ledger, LaborStats::default())?;
+    // The housing ledger (ADR 0009 §§3, 5): controller state and the
+    // measured market price of homes.
+    world.insert(ledger, HousingBook::default())?;
 
     // The bank (ADR 0009 §§1–2): one vault, seeded with equity — counted
     // in issuance below like every other genesis wallet.
@@ -49,6 +52,7 @@ pub fn populate(world: &mut World, tables: &EconTables) -> Result<(), EcsError> 
             loans: Vec::new(),
             interest_received: Money::ZERO,
             deposit_interest_paid: Money::ZERO,
+            granted: Vec::new(),
         },
     )?;
 

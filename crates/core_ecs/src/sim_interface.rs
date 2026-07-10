@@ -19,8 +19,8 @@ pub use econ::{
 #[path = "sim_interface_money.rs"]
 mod money;
 pub use money::{
-    BankBook, BorrowerStatus, HomeBuilt, HomeSold, Loan, LoanDefaulted, LoanGranted, Ownership,
-    TaxCollected, TaxKind, Tenancy, TenancyStarted, TreasuryBook,
+    BankBook, BorrowerStatus, HomeBuilt, HomeSold, HousingBook, Loan, LoanDefaulted, LoanGranted,
+    Ownership, TaxCollected, TaxKind, Tenancy, TenancyStarted, TreasuryBook,
 };
 
 /// One need level in per-million units (ADR 0005 §2): 0 = fully depleted,

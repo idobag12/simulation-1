@@ -310,7 +310,13 @@ fn execute_purchase(
         .next()
         .map(|(entity, _)| entity);
     let tax = match treasury {
-        Some(_) => core_types::Money::from_mills(price.mills() * sales_tax_per_mille / 1000),
+        Some(_) => core_types::Money::from_mills(
+            price.mills().checked_mul(sales_tax_per_mille).ok_or(
+                core_ecs::EcsError::Arithmetic(core_types::ArithmeticError::Overflow {
+                    op: "sales tax",
+                }),
+            )? / 1000,
+        ),
         None => core_types::Money::ZERO,
     };
     let net = price.try_sub(tax)?;

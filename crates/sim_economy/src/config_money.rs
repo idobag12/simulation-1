@@ -53,15 +53,24 @@ pub struct HousingConfig {
     pub upkeep_mills_per_day: i64,
     /// Rent ask = upkeep × (1000 + margin) / 1000.
     pub rent_margin_per_mille: i64,
-    /// A homeless bidder offers this per-mille of their cash as daily
-    /// rent.
+    /// A homeless bidder offers this per-mille of their SAVINGS
+    /// (wallet + vault row — the float sweep pins pocket cash) as
+    /// daily rent.
     pub rent_bid_per_mille: i64,
+    /// The vacancy controller's target, per-mille of owned homes vacant
+    /// — above it the rental ask steps down, below it up (ADR 0009 §3).
+    pub rent_vacancy_target_per_mille: i64,
+    /// The controller's bounded per-clearing step, per-mille of the ask.
+    pub rent_step_per_mille: i64,
     /// The purchase market clears every N days.
     pub purchase_period_days: u64,
-    /// The asking price for a home, mills.
+    /// The home price FLOOR, mills — the market anchor before any sale
+    /// (the measured clearing average takes over after, ADR 0009 §5).
     pub home_price_mills: i64,
     /// A buyer must hold savings ≥ per-mille × price / 1000.
     pub buyer_savings_per_mille: i64,
+    /// A buyer bids this per-mille of their savings at the clearing.
+    pub home_bid_per_mille: i64,
     /// Mortgage cap: loan ≤ per-mille × price / 1000.
     pub mortgage_ltv_per_mille: i64,
     /// Builders start a home only when the price covers estimated cost ×

@@ -6,8 +6,7 @@
 //! the one macro lever, and it is a modeled actor (SPEC §12).
 
 use core_ecs::sim_interface::{
-    BankBook, BorrowerStatus, Employment, FirmBooks, Loan, LoanDefaulted, LoanGranted, Needs,
-    Wallet,
+    BankBook, BorrowerStatus, Employment, FirmBooks, Loan, LoanDefaulted, Needs, Wallet,
 };
 use core_ecs::{CommandBuffer, EcsError, Entity, System, TickContext, World};
 use core_types::calendar::TICKS_PER_DAY;
@@ -15,6 +14,9 @@ use core_types::{ArithmeticError, Money};
 
 use crate::components::Firm;
 use crate::config::EconTables;
+use crate::vault::{
+    deposit_balance, grant_loan, granted_principal, repossess, vault_deposit, vault_withdraw,
+};
 
 fn overflow(op: &'static str) -> EcsError {
     EcsError::Arithmetic(ArithmeticError::Overflow { op })
@@ -121,10 +123,12 @@ impl BankSystem {
                 .get::<Wallet>(loan.borrower)?
                 .map(|wallet| wallet.cash)
                 .unwrap_or(Money::ZERO);
-            // Auto-debit: when the wallet is short, the bank draws the
-            // payment from the borrower's own deposit row first (a
-            // mortgage holder's wealth sits in the vault — defaulting a
-            // depositor who can pay would be a lie).
+            // Auto-debit: when the wallet is short but wallet + vault
+            // row cover the payment, the bank draws the shortfall from
+            // the borrower's own deposit row (a mortgage holder's wealth
+            // sits in the vault — defaulting a depositor who can pay
+            // would be a lie). Net non-negative for the bank wallet: the
+            // withdrawal comes straight back inside the payment.
             if cash < due && world.is_alive(loan.borrower) {
                 let balance = deposit_balance(world, bank, loan.borrower)?;
                 let shortfall = due.try_sub(cash)?;
@@ -157,12 +161,54 @@ impl BankSystem {
                     survivors.push(loan);
                 }
             } else {
-                // Default: the cash already left the vault when the loan
-                // was granted; the write-off books the loss to equity so
-                // the vault identity keeps holding (ADR 0009 §2).
-                if let Some(book) = world.get_mut::<BankBook>(bank)? {
-                    book.equity = book.equity.try_sub(loan.principal)?;
+                // Default — with partial RECOVERY first: the bank seizes
+                // the defaulter's deposit row (an internal netting: row
+                // and outstanding shrink together) and their remaining
+                // cash, up to the outstanding principal, before writing
+                // the residual off against equity. Equity may go
+                // negative — bank insolvency is a modeled state, not an
+                // invariant violation (deposit interest already stops
+                // when equity cannot fund it).
+                let mut residual = loan.principal;
+                if world.is_alive(loan.borrower) {
+                    if let Some(book) = world.get_mut::<BankBook>(bank)?
+                        && let Some(row) = book
+                            .deposits
+                            .iter_mut()
+                            .find(|(owner, _)| *owner == loan.borrower)
+                    {
+                        let seize = Money::from_mills(residual.mills().min(row.1.mills()));
+                        row.1 = row.1.try_sub(seize)?;
+                        residual = residual.try_sub(seize)?;
+                    }
+                    let cash = world
+                        .get::<Wallet>(loan.borrower)?
+                        .map(|wallet| wallet.cash)
+                        .unwrap_or(Money::ZERO);
+                    let seize = Money::from_mills(residual.mills().min(cash.mills()).max(0));
+                    if seize > Money::ZERO {
+                        if let Some(wallet) = world.get_mut::<Wallet>(loan.borrower)? {
+                            wallet.cash = wallet.cash.try_sub(seize)?;
+                        }
+                        if let Some(wallet) = world.get_mut::<Wallet>(bank)? {
+                            wallet.cash = wallet.cash.try_add(seize)?;
+                        }
+                        if let Some(books) = world.get_mut::<FirmBooks>(loan.borrower)? {
+                            books.expenses = books.expenses.try_add(seize)?;
+                        }
+                        residual = residual.try_sub(seize)?;
+                    }
                 }
+                if let Some(book) = world.get_mut::<BankBook>(bank)? {
+                    book.equity = book.equity.try_sub(residual)?;
+                }
+                // A mortgage is secured (ADR 0009 §3): the bank
+                // repossesses the collateral home. A defaulting
+                // owner-occupier loses their Residence — measured
+                // homelessness, and tomorrow's rental demand. The home,
+                // now vacant and bank-owned, re-enters the purchase
+                // market on its own.
+                repossess(world, bank, &loan)?;
                 if world.is_alive(loan.borrower) {
                     world.insert(
                         loan.borrower,
@@ -174,7 +220,7 @@ impl BankSystem {
                 }
                 world.emit(&LoanDefaulted {
                     borrower: loan.borrower,
-                    written_off: loan.principal,
+                    written_off: residual,
                 })?;
             }
         }
@@ -295,28 +341,29 @@ impl BankSystem {
             // day payment (same formula `grant_loan` books) — the
             // screen prices the rate in, so dear money means fewer
             // grants (ADR 0009 §2, §8).
-            let day_payment = (principal.mills() / config.repay_term_days.max(1))
-                .checked_add(
-                    principal
-                        .mills()
-                        .checked_mul(rate)
-                        .ok_or_else(|| overflow("screen interest"))?
-                        / 1_000_000,
-                )
-                .ok_or_else(|| overflow("screen payment"))?
-                .max(1);
-            let obligation = day_payment
+            let payment = crate::vault::day_payment(principal, rate, config.repay_term_days)?;
+            let obligation = payment
+                .mills()
                 .checked_mul(config.repay_term_days.max(1))
                 .ok_or_else(|| overflow("screen obligation"))?;
             // Builders were screened by the construction hurdle above
             // (the sale price covers cost + financing + margin); working
             // capital screens on the borrower's own revenue history.
             if !builds_home {
+                // Revenue NET of past principal grants: grant_loan books
+                // principal as revenue to keep the ledger identity, and
+                // without this deduction every loan would ratchet up the
+                // borrower's own credit history (ADR 0009 §2 — the screen
+                // reads sales, not borrowings).
                 let revenue = world
                     .get::<FirmBooks>(firm)?
                     .map(|books| books.revenue.mills())
                     .unwrap_or(0);
+                let borrowed = granted_principal(world, bank, firm)?.mills();
                 if revenue
+                    .checked_sub(borrowed)
+                    .ok_or_else(|| overflow("net revenue"))?
+                    .max(0)
                     .checked_mul(config.serviceability_revenue_per_mille)
                     .ok_or_else(|| overflow("serviceability"))?
                     / 1000
@@ -332,7 +379,15 @@ impl BankSystem {
             if bank_cash < principal {
                 continue;
             }
-            grant_loan(world, bank, firm, principal, rate, config.repay_term_days)?;
+            grant_loan(
+                world,
+                bank,
+                firm,
+                principal,
+                rate,
+                config.repay_term_days,
+                None,
+            )?;
         }
         Ok(())
     }
@@ -351,8 +406,17 @@ impl BankSystem {
             if cash > float {
                 vault_deposit(world, bank, citizen, Money::from_mills(cash - float))?;
             } else if cash < float {
+                // Bounded by the row AND by the vault's actual cash —
+                // the bank lends deposits (ADR 0009 §1), so a stretched
+                // vault honestly short-fills withdrawals instead of
+                // going negative and halting the audit.
                 let balance = deposit_balance(world, bank, citizen)?;
-                let need = Money::from_mills((float - cash).min(balance.mills()));
+                let vault_cash = world
+                    .get::<Wallet>(bank)?
+                    .map(|wallet| wallet.cash.mills())
+                    .unwrap_or(0)
+                    .max(0);
+                let need = Money::from_mills((float - cash).min(balance.mills()).min(vault_cash));
                 if need > Money::ZERO {
                     vault_withdraw(world, bank, citizen, need)?;
                 }
@@ -387,144 +451,6 @@ impl BankSystem {
     }
 }
 
-/// Grants a loan: vault → borrower cash, a book row, the borrower's
-/// inflow ledger, and the fact — one atomic call (ADR 0007 §4
-/// discipline). Also used by the purchase market for mortgages (the
-/// principal goes to the SELLER there; this variant pays the borrower).
-pub(crate) fn grant_loan(
-    world: &mut World,
-    bank: Entity,
-    borrower: Entity,
-    principal: Money,
-    rate_per_million_daily: i64,
-    term_days: i64,
-) -> Result<(), EcsError> {
-    let day_payment = Money::from_mills(
-        (principal.mills() / term_days.max(1))
-            .checked_add(
-                principal
-                    .mills()
-                    .checked_mul(rate_per_million_daily)
-                    .ok_or_else(|| overflow("payment interest"))?
-                    / 1_000_000,
-            )
-            .ok_or_else(|| overflow("day payment"))?
-            .max(1),
-    );
-    if let Some(wallet) = world.get_mut::<Wallet>(bank)? {
-        wallet.cash = wallet.cash.try_sub(principal)?;
-    }
-    if let Some(wallet) = world.get_mut::<Wallet>(borrower)? {
-        wallet.cash = wallet.cash.try_add(principal)?;
-    }
-    if let Some(books) = world.get_mut::<FirmBooks>(borrower)? {
-        books.revenue = books.revenue.try_add(principal)?;
-    }
-    if let Some(book) = world.get_mut::<BankBook>(bank)? {
-        book.loans.push(Loan {
-            borrower,
-            principal,
-            rate_per_million_daily,
-            day_payment,
-        });
-    }
-    world.emit(&LoanGranted {
-        borrower,
-        principal,
-        rate_per_million_daily,
-    })?;
-    Ok(())
-}
-
-/// The borrower's current deposit balance.
-pub(crate) fn deposit_balance(
-    world: &World,
-    bank: Entity,
-    owner: Entity,
-) -> Result<Money, EcsError> {
-    Ok(world
-        .get::<BankBook>(bank)?
-        .and_then(|book| {
-            book.deposits
-                .iter()
-                .find(|(entity, _)| *entity == owner)
-                .map(|(_, balance)| *balance)
-        })
-        .unwrap_or(Money::ZERO))
-}
-
-/// Moves cash wallet → vault and credits the owner's row (kept in owner
-/// entity-index order).
-pub(crate) fn vault_deposit(
-    world: &mut World,
-    bank: Entity,
-    owner: Entity,
-    amount: Money,
-) -> Result<(), EcsError> {
-    if amount <= Money::ZERO {
-        return Ok(());
-    }
-    if let Some(wallet) = world.get_mut::<Wallet>(owner)? {
-        wallet.cash = wallet.cash.try_sub(amount)?;
-    }
-    if let Some(wallet) = world.get_mut::<Wallet>(bank)? {
-        wallet.cash = wallet.cash.try_add(amount)?;
-    }
-    if let Some(book) = world.get_mut::<BankBook>(bank)? {
-        match book
-            .deposits
-            .iter_mut()
-            .find(|(entity, _)| *entity == owner)
-        {
-            Some(row) => row.1 = row.1.try_add(amount)?,
-            None => {
-                book.deposits.push((owner, amount));
-                book.deposits.sort_by_key(|(entity, _)| entity.index());
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Moves cash vault → wallet and debits the owner's row (which must
-/// cover it — callers check).
-pub(crate) fn vault_withdraw(
-    world: &mut World,
-    bank: Entity,
-    owner: Entity,
-    amount: Money,
-) -> Result<(), EcsError> {
-    if amount <= Money::ZERO {
-        return Ok(());
-    }
-    if let Some(book) = world.get_mut::<BankBook>(bank)? {
-        let row = book
-            .deposits
-            .iter_mut()
-            .find(|(entity, _)| *entity == owner)
-            .ok_or_else(|| {
-                EcsError::InvariantViolation(format!(
-                    "withdrawal without a deposit row for entity #{}",
-                    owner.index()
-                ))
-            })?;
-        row.1 = row.1.try_sub(amount)?;
-        if row.1 < Money::ZERO {
-            return Err(EcsError::InvariantViolation(format!(
-                "entity #{}'s deposit row went negative",
-                owner.index()
-            )));
-        }
-    }
-    if let Some(wallet) = world.get_mut::<Wallet>(bank)? {
-        wallet.cash = wallet.cash.try_sub(amount)?;
-    }
-    if let Some(wallet) = world.get_mut::<Wallet>(owner)? {
-        wallet.cash = wallet.cash.try_add(amount)?;
-    }
-    Ok(())
-}
-
 impl System for BankSystem {
     fn name(&self) -> &'static str {
         "econ.bank"
@@ -547,3 +473,7 @@ impl System for BankSystem {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "bank_tests.rs"]
+mod tests;

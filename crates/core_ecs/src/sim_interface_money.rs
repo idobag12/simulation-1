@@ -10,7 +10,7 @@ use crate::store::{Component, StorageKind};
 /// One outstanding loan (ADR 0009 §2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Loan {
-    /// The borrowing entity (a firm in Phase 6).
+    /// The borrowing entity (a firm or a mortgaged citizen).
     pub borrower: Entity,
     /// Principal still owed, mills.
     pub principal: Money,
@@ -18,6 +18,9 @@ pub struct Loan {
     pub rate_per_million_daily: i64,
     /// The fixed daily payment (interest first, then principal).
     pub day_payment: Money,
+    /// The home securing a mortgage (repossessed on default);
+    /// `None` for working-capital and materials credit.
+    pub collateral: Option<Entity>,
 }
 
 /// The bank's book (ADR 0009 §§1–2), on the single bank entity beside
@@ -45,11 +48,37 @@ pub struct BankBook {
     pub interest_received: Money,
     /// Lifetime deposit interest credited to savers (counter).
     pub deposit_interest_paid: Money,
+    /// Lifetime principal granted per borrower, entity-index order —
+    /// the serviceability screen reads revenue NET of this, so past
+    /// borrowing (which books as revenue to keep the ledger identity)
+    /// never ratchets up a firm's credit history (ADR 0009 §2).
+    pub granted: Vec<(Entity, Money)>,
 }
 
 impl Component for BankBook {
     const NAME: &'static str = "econ.bank_book";
     // Sparse: exactly one bank.
+    const STORAGE: StorageKind = StorageKind::Sparse;
+}
+
+/// The housing market's measured state (ADR 0009 §§3, 5), on the ledger
+/// entity beside `EconCounters`: the rental ask the vacancy controller
+/// steers, and the last purchase-clearing average — the "market price of
+/// homes" the construction hurdle reads (the data floor stands in before
+/// any sale). Prices measured from clearings, never set (SPEC §12).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct HousingBook {
+    /// Current rental ask, mills/day (0 = uninitialized; the clearing
+    /// seeds it from the cost-plus floor).
+    pub rent_ask_mills: i64,
+    /// Average price of the last purchase clearing's sales, mills
+    /// (0 = no sale yet — the data floor applies).
+    pub last_home_price_mills: i64,
+}
+
+impl Component for HousingBook {
+    const NAME: &'static str = "econ.housing_book";
+    // Sparse: one row on the ledger.
     const STORAGE: StorageKind = StorageKind::Sparse;
 }
 

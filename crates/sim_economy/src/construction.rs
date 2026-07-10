@@ -76,5 +76,9 @@ pub(crate) fn construction_pays(
         1000 + housing.construction_margin_per_mille,
         "construction margin",
     )? / 1000;
-    Ok(housing.home_price_mills >= hurdle)
+    // Against the MEASURED market price of homes — the last purchase
+    // clearing's average, or the data floor before any sale (ADR 0009
+    // §5: prices measured, never set).
+    let anchor = crate::housing_market::home_price_anchor(world, housing.home_price_mills)?;
+    Ok(anchor >= hurdle)
 }

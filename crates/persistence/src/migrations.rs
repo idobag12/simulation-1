@@ -185,12 +185,13 @@ type SaveBodyV6 = SaveBody;
 
 // Registration growth from v6 to v7 (Phase 6, ADR 0009 §6). Historical
 // facts of the format, frozen here forever.
-const V7_ADDED_COMPONENTS: [&str; 5] = [
+const V7_ADDED_COMPONENTS: [&str; 6] = [
     "econ.bank_book",
     "econ.treasury_book",
     "world.ownership",
     "world.tenancy",
     "econ.borrower_status",
+    "econ.housing_book",
 ];
 const V7_ADDED_EVENTS: [&str; 6] = [
     "econ.loan_granted",

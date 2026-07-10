@@ -450,5 +450,8 @@ impl System for PricingSystem {
 }
 
 #[cfg(test)]
+#[path = "labor_tests.rs"]
+mod labor_tests;
+#[cfg(test)]
 #[path = "systems_tests.rs"]
-mod tests;
+pub(crate) mod tests;

@@ -140,9 +140,24 @@ impl System for WorkingAgeSystem {
                 newly_of_age.push(entity);
             }
         }
-        // Pass 2: stamp.
+        // Pass 2: stamp — and the new adult leaves the nest (ADR 0009
+        // §3: new adults are the rental market's demand margin). A
+        // citizen coming of age in a home they do NOT own gives up the
+        // family Residence; tomorrow's rental clearing sees them
+        // homeless and they bid from their savings. Owners stay put,
+        // and pre-Phase 6 worlds (no Ownership rows) are untouched —
+        // migrations never invent state.
         for entity in newly_of_age {
             world.insert(entity, WorkingAge)?;
+            let home = world
+                .get::<core_ecs::sim_interface::Residence>(entity)?
+                .map(|residence| residence.home);
+            if let Some(home) = home
+                && let Some(ownership) = world.get::<Ownership>(home)?
+                && ownership.owner != entity
+            {
+                world.remove::<core_ecs::sim_interface::Residence>(entity)?;
+            }
         }
         Ok(())
     }
@@ -228,6 +243,74 @@ fn settle_death(w: &mut World, entity: Entity, household: Option<Entity>) -> Res
             w.despawn(household)?;
         }
     }
+    // Debts settle BEFORE the estate distributes (ADR 0009 §3): each of
+    // the deceased's loans is repaid from wallet cash, then from the
+    // deposit row (already vault-side — an internal netting); a residual
+    // is written off against bank equity, with a mortgage's collateral
+    // home passing to the bank as its recovery in kind. Heirs inherit
+    // net of debts — the dead take nothing, and owe nothing silently.
+    if let Some((bank, _)) = w.iter::<BankBook>()?.next() {
+        let loans: Vec<core_ecs::sim_interface::Loan> = w
+            .get::<BankBook>(bank)?
+            .map(|book| {
+                book.loans
+                    .iter()
+                    .filter(|loan| loan.borrower == entity)
+                    .copied()
+                    .collect()
+            })
+            .unwrap_or_default();
+        for loan in loans {
+            let mut residual = loan.principal;
+            // Leg 1: wallet cash -> bank wallet.
+            let cash = w
+                .get::<Wallet>(entity)?
+                .map(|wallet| wallet.cash)
+                .unwrap_or(Money::ZERO);
+            let from_cash = Money::from_mills(residual.mills().min(cash.mills()).max(0));
+            if from_cash > Money::ZERO {
+                if let Some(wallet) = w.get_mut::<Wallet>(entity)? {
+                    wallet.cash = wallet.cash.try_sub(from_cash)?;
+                }
+                if let Some(wallet) = w.get_mut::<Wallet>(bank)? {
+                    wallet.cash = wallet.cash.try_add(from_cash)?;
+                }
+                residual = residual.try_sub(from_cash)?;
+            }
+            // Leg 2: the deposit row (the mills already sit in the
+            // vault -- row and outstanding shrink together).
+            if residual > Money::ZERO
+                && let Some(book) = w.get_mut::<BankBook>(bank)?
+                && let Some(row) = book.deposits.iter_mut().find(|(owner, _)| *owner == entity)
+            {
+                let from_row = Money::from_mills(residual.mills().min(row.1.mills()).max(0));
+                row.1 = row.1.try_sub(from_row)?;
+                residual = residual.try_sub(from_row)?;
+            }
+            // Leg 3: the residual -- collateral to the bank, loss to
+            // equity (the vault identity holds through all three legs).
+            if residual > Money::ZERO {
+                if let Some(home) = loan.collateral
+                    && w.is_alive(home)
+                    && w.get::<Ownership>(home)?.map(|o| o.owner) == Some(entity)
+                    && let Some(ownership) = w.get_mut::<Ownership>(home)?
+                {
+                    ownership.owner = bank;
+                }
+                if let Some(book) = w.get_mut::<BankBook>(bank)? {
+                    book.equity = book.equity.try_sub(residual)?;
+                }
+                w.emit(&core_ecs::sim_interface::LoanDefaulted {
+                    borrower: entity,
+                    written_off: residual,
+                })?;
+            }
+        }
+        if let Some(book) = w.get_mut::<BankBook>(bank)? {
+            book.loans.retain(|loan| loan.borrower != entity);
+        }
+    }
+
     let estate = w.get::<Wallet>(entity)?.map(|wallet| wallet.cash);
     if let Some(estate) = estate
         && estate != Money::ZERO
@@ -308,6 +391,10 @@ mod tests {
         let mut world = World::new(Seed::new(1), 16);
         world.register::<Identity>().expect("register");
         world.register::<WorkingAge>().expect("register");
+        world
+            .register::<core_ecs::sim_interface::Residence>()
+            .expect("register");
+        world.register::<Ownership>().expect("register");
         let child = world.spawn();
         // Born exactly 16 years before tick YEAR: at tick 0 they are 15,
         // at tick YEAR they turn 16.
@@ -345,6 +432,158 @@ mod tests {
         assert!(
             world.get::<WorkingAge>(child).expect("get").is_some(),
             "the 16th birthday joins the labor force"
+        );
+    }
+
+    /// ADR 0009 §3: death settles debts BEFORE the estate distributes —
+    /// cash and the deposit row repay the loan, the collateral home
+    /// covers (in kind) what they cannot, only the residual hits bank
+    /// equity, and the heir inherits what remains (nothing silently).
+    #[test]
+    fn estates_settle_debts_before_inheritance() {
+        use core_ecs::sim_interface::{BankBook, EconCounters, Loan, Ownership, Wallet};
+        use core_types::Money;
+
+        let mut world = World::new(Seed::new(3), 16);
+        world.register::<Wallet>().expect("register");
+        world.register::<BankBook>().expect("register");
+        world.register::<Ownership>().expect("register");
+        world
+            .register::<core_ecs::sim_interface::TreasuryBook>()
+            .expect("register");
+        world.register::<EconCounters>().expect("register");
+        world.register::<Household>().expect("register");
+        world
+            .register_event::<core_ecs::sim_interface::LoanDefaulted>()
+            .expect("register");
+
+        let bank = world.spawn();
+        let deceased = world.spawn();
+        let heir = world.spawn();
+        let home = world.spawn();
+        let second_home = world.spawn();
+        world
+            .insert(
+                bank,
+                Wallet {
+                    // equity 10_000 + deposits 400 − outstanding 1_000:
+                    // the identity holds at the start.
+                    cash: Money::from_mills(9_400),
+                },
+            )
+            .expect("insert");
+        world
+            .insert(
+                bank,
+                BankBook {
+                    equity: Money::from_mills(10_000),
+                    policy_rate_per_million_daily: 800,
+                    last_price_index_milli: 0,
+                    deposits: vec![(deceased, Money::from_mills(400))],
+                    loans: vec![Loan {
+                        borrower: deceased,
+                        principal: Money::from_mills(1_000),
+                        rate_per_million_daily: 800,
+                        day_payment: Money::from_mills(20),
+                        collateral: Some(home),
+                    }],
+                    interest_received: Money::ZERO,
+                    deposit_interest_paid: Money::ZERO,
+                    granted: vec![(deceased, Money::from_mills(1_000))],
+                },
+            )
+            .expect("insert");
+        world
+            .insert(
+                deceased,
+                Wallet {
+                    cash: Money::from_mills(300),
+                },
+            )
+            .expect("insert");
+        world
+            .insert(heir, Wallet { cash: Money::ZERO })
+            .expect("insert");
+        world
+            .insert(home, Ownership { owner: deceased })
+            .expect("insert");
+        world
+            .insert(second_home, Ownership { owner: deceased })
+            .expect("insert");
+        let household = world.spawn();
+        world
+            .insert(
+                household,
+                Household {
+                    members: vec![deceased, heir],
+                },
+            )
+            .expect("insert");
+
+        settle_death(&mut world, deceased, Some(household)).expect("settle");
+
+        // Debt legs: 300 cash + 400 row repay 700; the 300 residual is
+        // covered in kind — the collateral passes to the BANK — and
+        // written off against equity.
+        let book = world
+            .iter::<BankBook>()
+            .expect("query")
+            .next()
+            .map(|(_, book)| book.clone())
+            .expect("bank");
+        assert!(book.loans.is_empty(), "the debt died with the debtor");
+        assert_eq!(
+            world
+                .get::<Wallet>(bank)
+                .expect("query")
+                .expect("wallet")
+                .cash,
+            Money::from_mills(9_700),
+            "cash repayment reached the vault"
+        );
+        assert_eq!(
+            book.equity,
+            Money::from_mills(9_700),
+            "only the unrecovered residual hit equity"
+        );
+        assert_eq!(
+            world
+                .get::<Ownership>(home)
+                .expect("query")
+                .expect("owned")
+                .owner,
+            bank,
+            "the collateral home is the bank's recovery in kind"
+        );
+        // The vault identity: wallet 9_300 == deposits 0 + equity 9_700
+        // − outstanding 0... the deceased's row was consumed by the debt
+        // and the empty row passed to nobody.
+        let deposits: i64 = book.deposits.iter().map(|(_, b)| b.mills()).sum();
+        assert_eq!(deposits, 0, "the row was consumed by the debt");
+        assert_eq!(
+            9_700,
+            deposits + book.equity.mills(),
+            "the vault identity holds through the whole settlement"
+        );
+        // The estate: no cash left; the UNENCUMBERED home passes to the
+        // heir.
+        assert_eq!(
+            world
+                .get::<Ownership>(second_home)
+                .expect("query")
+                .expect("owned")
+                .owner,
+            heir,
+            "the free-and-clear home is inherited"
+        );
+        assert_eq!(
+            world
+                .get::<Wallet>(heir)
+                .expect("query")
+                .expect("wallet")
+                .cash,
+            Money::ZERO,
+            "the debt consumed the liquid estate — the heir gets no cash"
         );
     }
 }

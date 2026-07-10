@@ -107,6 +107,15 @@ pub fn audit_economy(world: &World) -> Result<bool, EcsError> {
                     owner.index()
                 )));
             }
+            // Rows belong to the living: estates settle synchronously at
+            // death, so a dead owner's row is a leak the sweep would
+            // silently misattribute if their index recycles.
+            if !world.is_alive(*owner) {
+                return Err(EcsError::InvariantViolation(format!(
+                    "entity #{} is dead but still holds a deposit row",
+                    owner.index()
+                )));
+            }
             deposits = deposits.try_add(*balance)?;
         }
         let mut outstanding = Money::ZERO;
@@ -114,6 +123,14 @@ pub fn audit_economy(world: &World) -> Result<bool, EcsError> {
             if loan.principal < Money::ZERO {
                 return Err(EcsError::InvariantViolation(format!(
                     "entity #{}'s loan principal is negative",
+                    loan.borrower.index()
+                )));
+            }
+            // Death settles debts synchronously (estate first, ADR 0009
+            // §3), so a dead borrower's surviving loan is a leak.
+            if !world.is_alive(loan.borrower) {
+                return Err(EcsError::InvariantViolation(format!(
+                    "entity #{} is dead but still owes a loan",
                     loan.borrower.index()
                 )));
             }
@@ -129,6 +146,19 @@ pub fn audit_economy(world: &World) -> Result<bool, EcsError> {
                 "the vault does not balance: bank wallet = {vault} but \
                  deposits {deposits} + equity {} − outstanding {outstanding} = {expected}",
                 book.equity
+            )));
+        }
+    }
+
+    // Ownership belongs to the living: death escheats or bequeaths every
+    // home synchronously, so a dead owner is a leak (and an index-reuse
+    // hazard for every map keyed on owners).
+    for (home, ownership) in world.iter::<core_ecs::sim_interface::Ownership>()? {
+        if !world.is_alive(ownership.owner) {
+            return Err(EcsError::InvariantViolation(format!(
+                "home #{}'s owner #{} is dead",
+                home.index(),
+                ownership.owner.index()
             )));
         }
     }
@@ -186,6 +216,9 @@ mod tests {
         world.register::<FirmBooks>().expect("register");
         world.register::<EconCounters>().expect("register");
         world.register::<BankBook>().expect("register");
+        world
+            .register::<core_ecs::sim_interface::Ownership>()
+            .expect("register");
         world
     }
 

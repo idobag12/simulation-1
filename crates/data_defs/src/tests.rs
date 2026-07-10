@@ -64,8 +64,10 @@ const GOOD_BANK: &str = r#"BankConfig(
     )"#;
 const GOOD_HOUSING: &str = r#"HousingConfig(
         upkeep_mills_per_day: 40, rent_margin_per_mille: 250, rent_bid_per_mille: 8,
+        rent_vacancy_target_per_mille: 200, rent_step_per_mille: 50,
         purchase_period_days: 10, home_price_mills: 30000, buyer_savings_per_mille: 300,
-        mortgage_ltv_per_mille: 700, construction_margin_per_mille: 300,
+        home_bid_per_mille: 1500, mortgage_ltv_per_mille: 700,
+        construction_margin_per_mille: 300,
     )"#;
 const GOOD_TAXES: &str = r#"TaxesConfig(
         income_per_mille: 100, sales_per_mille: 50, treasury_seed_mills: 50000,

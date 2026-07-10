@@ -134,7 +134,14 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
     validate_locations(data_root, &locations, &people)?;
     validate_ai(data_root, &ai, &people, &locations)?;
     validate_economy(
-        data_root, &goods, &recipes, &firms, &economy, &people, &locations,
+        data_root,
+        &goods,
+        &recipes,
+        &firms,
+        &economy,
+        &people,
+        &locations,
+        &taxes.public_location_kind_id,
     )?;
     validate_labor(data_root, &labor, &people)?;
     validate_money(data_root, &bank, &housing, &taxes, &locations)?;
@@ -169,9 +176,11 @@ fn load_ron<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, DataError>
 mod resolve;
 mod validate;
 mod validate_econ;
+mod validate_money;
 pub use resolve::{resolve_ai, resolve_economy};
 use validate::{validate, validate_ai, validate_locations, validate_people};
-use validate_econ::{validate_economy, validate_labor, validate_money};
+use validate_econ::validate_economy;
+use validate_money::{validate_labor, validate_money};
 
 #[cfg(test)]
 #[path = "tests.rs"]

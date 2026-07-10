@@ -44,10 +44,10 @@ const V1_FIXTURE: &[u8] = include_bytes!("../fixtures/v1_seed7_fixture50_tick100
 
 /// Golden hash of the migrated v1 fixture at load (re-recorded Phase 6:
 /// registration grew, ADR 0009 §6).
-const V1_GOLDEN_HASH_AT_LOAD: u64 = 0x30f7_afa4_148b_72bf;
+const V1_GOLDEN_HASH_AT_LOAD: u64 = 0x6e60_3403_5599_d6ac;
 
 /// Golden hash after resuming the migrated v1 world 100 ticks.
-const V1_GOLDEN_HASH_AFTER_100: u64 = 0x0ade_9956_b304_9d48;
+const V1_GOLDEN_HASH_AFTER_100: u64 = 0x511b_6acd_6a88_3b3b;
 
 #[test]
 fn v1_golden_save_loads_through_migration_to_the_golden_state() {
@@ -88,10 +88,10 @@ fn v1_golden_save_resumes_deterministically() {
 const V2_FIXTURE: &[u8] = include_bytes!("../fixtures/v2_seed13_fixture60_tick2000.embersave");
 
 /// Golden hash of the migrated v2 fixture at load (re-recorded Phase 6).
-const V2_GOLDEN_HASH_AT_LOAD: u64 = 0x9afc_94d3_324f_161a;
+const V2_GOLDEN_HASH_AT_LOAD: u64 = 0x6c3d_d680_a3a5_5d6b;
 
 /// Golden hash after resuming the migrated v2 fixture 100 ticks.
-const V2_GOLDEN_HASH_AFTER_100: u64 = 0x1be8_0fe9_d4a2_ed99;
+const V2_GOLDEN_HASH_AFTER_100: u64 = 0x4cb9_cb1e_0120_1174;
 
 #[test]
 fn v2_golden_save_loads_through_migration_to_the_golden_state() {
@@ -132,7 +132,7 @@ const V3_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v3_seed17_fixture40_citizens300_tick3000.embersave");
 
 /// Golden hash of the migrated v3 fixture at load (re-recorded Phase 6).
-const V3_GOLDEN_HASH_AT_LOAD: u64 = 0xa330_b96b_c9ab_ad70;
+const V3_GOLDEN_HASH_AT_LOAD: u64 = 0x773e_60c7_418f_f179;
 
 /// Golden hash after resuming the migrated v3 fixture 1,500 ticks
 /// (crossing a day boundary so mortality and needs decay both run again;
@@ -140,7 +140,7 @@ const V3_GOLDEN_HASH_AT_LOAD: u64 = 0xa330_b96b_c9ab_ad70;
 /// town has no places, so its citizens idle, honestly and deterministically;
 /// the Phase 4 economy systems no-op over its empty stores and the auditor
 /// honestly reports nothing to audit).
-const V3_GOLDEN_HASH_AFTER_1500: u64 = 0x0dab_92a4_50da_921e;
+const V3_GOLDEN_HASH_AFTER_1500: u64 = 0x2ab2_0223_10c9_b7fb;
 
 #[test]
 fn v3_golden_save_loads_to_the_exact_golden_state() {
@@ -184,13 +184,13 @@ const V4_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v4_seed23_fixture30_citizens250_tick2500.embersave");
 
 /// Golden hash of the v4 fixture at load (re-recorded Phase 6).
-const V4_GOLDEN_HASH_AT_LOAD: u64 = 0x534d_570f_d7a4_294f;
+const V4_GOLDEN_HASH_AT_LOAD: u64 = 0x849e_e01b_3718_7be2;
 
 /// Golden hash after resuming the v4 fixture 700 ticks (mid-flight
 /// actions complete, new decisions land, needs decay and satisfy — under
 /// the v5 data snapshot, whose satisfiers changed; a migrated pre-economy
 /// town has no wallets or shops, so nobody buys anything, honestly).
-const V4_GOLDEN_HASH_AFTER_700: u64 = 0xe501_b4c9_a748_6652;
+const V4_GOLDEN_HASH_AFTER_700: u64 = 0xd4f3_4b47_e8be_8e31;
 
 #[test]
 fn v4_golden_save_loads_to_the_exact_golden_state() {
@@ -245,11 +245,11 @@ const V5_FIXTURE: &[u8] =
 /// stamps real adults, the ledger grows its stats row, and the market
 /// hires — proven semantically by
 /// `v5_migrated_economy_catches_up_with_the_labor_market`).
-const V5_GOLDEN_HASH_AT_LOAD: u64 = 0x1891_d504_a60f_4490;
+const V5_GOLDEN_HASH_AT_LOAD: u64 = 0xfd91_2567_9dce_129b;
 
 /// Golden hash after resuming the v5 fixture 700 ticks (purchases,
 /// trades, repricing, and the daily audit all run again).
-const V5_GOLDEN_HASH_AFTER_700: u64 = 0x0020_4480_6de0_6370;
+const V5_GOLDEN_HASH_AFTER_700: u64 = 0x7858_a11b_3568_311d;
 
 #[test]
 fn v5_golden_save_loads_to_the_exact_golden_state() {
@@ -377,13 +377,13 @@ const V6_FIXTURE: &[u8] =
 
 /// Golden hash of the v6 fixture at load (re-recorded Phase 6:
 /// registration grew, ADR 0009 §6).
-const V6_GOLDEN_HASH_AT_LOAD: u64 = 0x133d_68b8_6a10_384b;
+const V6_GOLDEN_HASH_AT_LOAD: u64 = 0x2e96_3777_0fe6_a524;
 
 /// Golden hash after resuming the v6 fixture 1,000 ticks (the rest of
 /// the shift, then the 2,880 day boundary's audit/payroll/clearing —
 /// under the Phase 6 day schedule the money systems also run; a
 /// migrated town has no bank or treasury, so they no-op, honestly).
-const V6_GOLDEN_HASH_AFTER_1000: u64 = 0x40bf_4866_5912_3fc6;
+const V6_GOLDEN_HASH_AFTER_1000: u64 = 0x4284_986d_32ae_f2c5;
 
 #[test]
 fn v6_golden_save_loads_to_the_exact_golden_state() {
@@ -461,12 +461,12 @@ const V7_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v7_seed41_fixture30_citizens250_tick29360.embersave");
 
 /// Golden hash of the v7 fixture at load.
-const V7_GOLDEN_HASH_AT_LOAD: u64 = 0xda77_bab5_f2f4_e23d;
+const V7_GOLDEN_HASH_AT_LOAD: u64 = 0x8088_11f3_8abc_e3c2;
 
 /// Golden hash after resuming the v7 fixture 1,000 ticks (the rest of
 /// the shift, then the day boundary's audit, bank service/origination,
 /// payroll withholding, clearings, and markets).
-const V7_GOLDEN_HASH_AFTER_1000: u64 = 0x37df_ca3f_94f0_3665;
+const V7_GOLDEN_HASH_AFTER_1000: u64 = 0xc211_92ea_6345_d9d7;
 
 #[test]
 fn v7_golden_save_loads_to_the_exact_golden_state() {
@@ -506,6 +506,38 @@ fn v7_golden_save_loads_to_the_exact_golden_state() {
         "genesis homes are owned"
     );
     assert!(
+        book.loans.iter().all(|loan| loan.collateral.is_some()),
+        "the fixture's credit is all mortgages — every loan secured"
+    );
+    assert_ne!(
+        book.policy_rate_per_million_daily,
+        pinned_defs().bank.policy_neutral_per_million_daily,
+        "the Taylor rule has moved the rate off neutral"
+    );
+    let housing = world
+        .iter::<core_ecs::sim_interface::HousingBook>()
+        .expect("query")
+        .next()
+        .map(|(_, book)| *book)
+        .expect("the v7 fixture has a housing ledger");
+    assert!(
+        housing.last_home_price_mills > 0,
+        "the purchase clearing has measured a market price"
+    );
+    // Saved mid-shift: the Phase 5 action variants are in flight, so
+    // the resume golden covers their (de)serialization too (SPEC §9).
+    let working = world
+        .iter::<sim_ai::CurrentAction>()
+        .expect("query")
+        .filter(|(_, action)| {
+            matches!(
+                action,
+                sim_ai::CurrentAction::Work { .. } | sim_ai::CurrentAction::WorkTravel { .. }
+            )
+        })
+        .count();
+    assert!(working > 0, "the v7 fixture is saved mid-shift");
+    assert!(
         debug_tools::audit_economy(world).expect("audit"),
         "the loaded fixture must satisfy every conservation identity,
          bank vault and treasury included"
@@ -514,6 +546,42 @@ fn v7_golden_save_loads_to_the_exact_golden_state() {
         sim.state_hash().expect("hash failed"),
         WorldHash::new(V7_GOLDEN_HASH_AT_LOAD),
         "loaded v7 state differs from the state that was saved"
+    );
+}
+
+/// The one Phase 6 day-rate system the resume golden's window misses
+/// (day 21 is not a purchase day): loaded state drives a REAL purchase
+/// clearing at day 30 — mortgages are granted from restored books.
+#[test]
+fn v7_purchase_clearing_works_from_restored_state() {
+    let mut sim = persistence::load_from_bytes(V7_FIXTURE, load_config(), runner::register_world)
+        .expect("committed v7 save no longer loads");
+    let granted_at_load: i64 = sim
+        .world()
+        .iter::<core_ecs::sim_interface::BankBook>()
+        .expect("query")
+        .next()
+        .map(|(_, book)| book.granted.iter().map(|(_, m)| m.mills()).sum())
+        .unwrap_or(0);
+    let derived = runner::derive_spec_from_world(sim.world()).expect("derive");
+    let mut schedule = runner::build_schedule(&derived, &pinned_defs());
+    // Tick 29,360 → 43,810 crosses the day-30 boundary (tick 43,200),
+    // a purchase-clearing day under the pinned 10-day cadence.
+    sim.run_ticks(&mut schedule, 14_450).expect("resume failed");
+    let granted_after: i64 = sim
+        .world()
+        .iter::<core_ecs::sim_interface::BankBook>()
+        .expect("query")
+        .next()
+        .map(|(_, book)| book.granted.iter().map(|(_, m)| m.mills()).sum())
+        .unwrap_or(0);
+    assert!(
+        granted_after > granted_at_load,
+        "the day-30 clearing wrote new mortgages from restored state          ({granted_at_load} → {granted_after})"
+    );
+    assert!(
+        debug_tools::audit_economy(sim.world()).expect("audit"),
+        "every identity still holds ten days past the restore"
     );
 }
 

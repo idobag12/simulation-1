@@ -15,6 +15,7 @@ use crate::validate::verr;
 /// count 0 (their instances come from firm genesis); non-retail location
 /// kinds still may not be dead data (the check `validate_locations`
 /// delegated here).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_economy(
     data_root: &Path,
     goods: &sim_goods::config::GoodsConfig,
@@ -23,12 +24,13 @@ pub(crate) fn validate_economy(
     economy: &sim_economy::config::EconomyConfig,
     people: &sim_people::config::PeopleConfig,
     locations: &sim_world::config::LocationsConfig,
+    public_location_kind_id: &str,
 ) -> Result<(), DataError> {
     validate_goods(data_root, goods)?;
     validate_recipes(data_root, goods, recipes)?;
     validate_firms(data_root, goods, recipes, firms, people, locations)?;
     validate_market(data_root, economy)?;
-    validate_location_liveness(data_root, firms, locations)
+    validate_location_liveness(data_root, firms, locations, public_location_kind_id)
 }
 
 fn validate_goods(
@@ -385,13 +387,15 @@ fn validate_market(
 
 /// The dead-data check `validate_locations` delegated here: every
 /// location kind must either satisfy a need and get instantiated, or be
-/// claimed by a firm kind — or be the treasury's town hall
-/// (`taxes.ron`'s `public_location_kind_id`; the claim is checked by
+/// claimed by a firm kind — or be the treasury's own workplace
+/// (`taxes.ron`'s `public_location_kind_id`, passed through so the knob
+/// is genuinely data-driven; the kind itself is checked by
 /// `validate_money`).
 fn validate_location_liveness(
     data_root: &Path,
     firms: &sim_economy::config::FirmsConfig,
     locations: &sim_world::config::LocationsConfig,
+    public_location_kind_id: &str,
 ) -> Result<(), DataError> {
     let file = "locations.ron";
     for kind in &locations.kinds {
@@ -399,7 +403,7 @@ fn validate_location_liveness(
             .kinds
             .iter()
             .any(|firm| firm.location_kind_id == kind.id)
-            || kind.id == "town_hall";
+            || kind.id == public_location_kind_id;
         if claimed {
             continue;
         }
@@ -423,210 +427,6 @@ fn validate_location_liveness(
                 ),
             ));
         }
-    }
-    Ok(())
-}
-
-/// Validates `data/balance/labor.ron` (ADR 0008 §7), including its
-/// cross-references into needs and traits.
-pub(crate) fn validate_labor(
-    data_root: &Path,
-    labor: &sim_economy::config::LaborConfig,
-    people: &sim_people::config::PeopleConfig,
-) -> Result<(), DataError> {
-    let file = "balance/labor.ron";
-    let e = |message: String| verr(data_root, file, message);
-
-    if labor.shift_start_hour >= 24 || labor.shift_end_hour > 24 {
-        return Err(e("shift hours must be within the day".into()));
-    }
-    if labor.shift_start_hour >= labor.shift_end_hour {
-        return Err(e(
-            "shift_start_hour must be before shift_end_hour (no overnight shifts)".into(),
-        ));
-    }
-    if labor.reservation_base_mills < 1 {
-        return Err(e("reservation_base_mills must be >= 1".into()));
-    }
-    for (name, value) in [
-        (
-            "reservation_wealth_per_mille",
-            labor.reservation_wealth_per_mille,
-        ),
-        (
-            "reservation_trait_discount_per_mille",
-            labor.reservation_trait_discount_per_mille,
-        ),
-    ] {
-        if !(0..=1000).contains(&value) {
-            return Err(e(format!("{name} must be within 0..=1000")));
-        }
-    }
-    if labor.reservation_half_wealth_mills < 1 {
-        return Err(e("reservation_half_wealth_mills must be >= 1".into()));
-    }
-    if !(1..=1000).contains(&labor.bid_fraction_per_mille) {
-        return Err(e("bid_fraction_per_mille must be within 1..=1000".into()));
-    }
-    if labor.work_bias_micro < 0 {
-        return Err(e("work_bias_micro must be >= 0".into()));
-    }
-    if labor.work_ticks == 0 {
-        return Err(e("work_ticks must be >= 1".into()));
-    }
-    if labor.work_need_per_tick < 0 {
-        return Err(e("work_need_per_tick must be >= 0".into()));
-    }
-    if !people
-        .traits
-        .traits
-        .iter()
-        .any(|t| t.id == labor.reservation_trait_id)
-    {
-        return Err(e(format!(
-            "reservation_trait_id `{}` is not a defined trait",
-            labor.reservation_trait_id
-        )));
-    }
-    if !people
-        .needs
-        .needs
-        .iter()
-        .any(|n| n.id == labor.work_need_id)
-    {
-        return Err(e(format!(
-            "work_need_id `{}` is not a defined need",
-            labor.work_need_id
-        )));
-    }
-    Ok(())
-}
-
-/// Validates `data/balance/{bank,housing,taxes}.ron` (ADR 0009 §7).
-pub(crate) fn validate_money(
-    data_root: &Path,
-    bank: &sim_economy::BankConfig,
-    housing: &sim_economy::HousingConfig,
-    taxes: &sim_economy::TaxesConfig,
-    locations: &sim_world::config::LocationsConfig,
-) -> Result<(), DataError> {
-    let e = |file: &str, message: String| verr(data_root, file, message);
-
-    let b = "balance/bank.ron";
-    if bank.equity_seed_mills < 0 || bank.target_cash_float_mills < 0 {
-        return Err(e(b, "seed and float must be >= 0".into()));
-    }
-    for (name, value) in [
-        (
-            "deposit_spread_per_million_daily",
-            bank.deposit_spread_per_million_daily,
-        ),
-        (
-            "risk_premium_per_million_daily",
-            bank.risk_premium_per_million_daily,
-        ),
-        (
-            "policy_neutral_per_million_daily",
-            bank.policy_neutral_per_million_daily,
-        ),
-        (
-            "policy_sensitivity_per_million",
-            bank.policy_sensitivity_per_million,
-        ),
-    ] {
-        if value < 0 {
-            return Err(e(b, format!("{name} must be >= 0")));
-        }
-    }
-    if bank.policy_min_per_million_daily < 0
-        || bank.policy_min_per_million_daily > bank.policy_max_per_million_daily
-    {
-        return Err(e(b, "policy bounds must satisfy 0 <= min <= max".into()));
-    }
-    if bank.loan_payroll_multiple_per_mille < 1
-        || bank.working_capital_floor_days < 1
-        || bank.repay_term_days < 1
-        || bank.index_period_days == 0
-    {
-        return Err(e(
-            b,
-            "loan multiple, floor days, term, and index period must be >= 1".into(),
-        ));
-    }
-    if !(0..=1000).contains(&bank.serviceability_revenue_per_mille) {
-        return Err(e(
-            b,
-            "serviceability_revenue_per_mille must be within 0..=1000".into(),
-        ));
-    }
-
-    let h = "balance/housing.ron";
-    if housing.upkeep_mills_per_day < 1
-        || housing.home_price_mills < 1
-        || housing.purchase_period_days == 0
-    {
-        return Err(e(
-            h,
-            "upkeep, home price, and purchase period must be >= 1".into(),
-        ));
-    }
-    for (name, value) in [
-        ("rent_margin_per_mille", housing.rent_margin_per_mille),
-        ("rent_bid_per_mille", housing.rent_bid_per_mille),
-        ("buyer_savings_per_mille", housing.buyer_savings_per_mille),
-        ("mortgage_ltv_per_mille", housing.mortgage_ltv_per_mille),
-        (
-            "construction_margin_per_mille",
-            housing.construction_margin_per_mille,
-        ),
-    ] {
-        if !(0..=1000).contains(&value) {
-            return Err(e(h, format!("{name} must be within 0..=1000")));
-        }
-    }
-    if housing.buyer_savings_per_mille + housing.mortgage_ltv_per_mille < 1000 {
-        return Err(e(
-            h,
-            "savings + LTV must cover the price (>= 1000 per-mille combined)".into(),
-        ));
-    }
-
-    let t = "balance/taxes.ron";
-    for (name, value) in [
-        ("income_per_mille", taxes.income_per_mille),
-        ("sales_per_mille", taxes.sales_per_mille),
-    ] {
-        if !(0..=999).contains(&value) {
-            return Err(e(
-                t,
-                format!("{name} must be within 0..=999 (a 100% tax is a typo)"),
-            ));
-        }
-    }
-    if taxes.treasury_seed_mills < 0 || taxes.public_wage_bid_mills < 1 {
-        return Err(e(
-            t,
-            "treasury seed must be >= 0 and the wage bid >= 1".into(),
-        ));
-    }
-    let Some(kind) = locations
-        .kinds
-        .iter()
-        .find(|kind| kind.id == taxes.public_location_kind_id)
-    else {
-        return Err(e(
-            t,
-            format!(
-                "public_location_kind_id `{}` is not a defined location kind",
-                taxes.public_location_kind_id
-            ),
-        ));
-    };
-    if kind.is_home || kind.count != 0 {
-        return Err(e(
-            t,
-            "the public location kind must be public with count 0 (genesis creates it)".into(),
-        ));
     }
     Ok(())
 }

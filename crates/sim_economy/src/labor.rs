@@ -179,7 +179,14 @@ fn transfer_wage(
         .map(|(entity, _)| entity)
         .filter(|treasury| *treasury != employer);
     let tax = match treasury {
-        Some(_) => Money::from_mills(wage.mills() * income_tax_per_mille / 1000),
+        Some(_) => Money::from_mills(
+            wage.mills()
+                .checked_mul(income_tax_per_mille)
+                .ok_or(EcsError::Arithmetic(ArithmeticError::Overflow {
+                    op: "income tax",
+                }))?
+                / 1000,
+        ),
         None => Money::ZERO,
     };
     let net = wage.try_sub(tax)?;
@@ -419,7 +426,7 @@ impl System for LaborMarketSystem {
                     .map(|wallet| wallet.cash.mills())
                     .unwrap_or(0);
                 let committed_wages = committed.get(&treasury.index()).copied().unwrap_or(0);
-                let free = (cash - committed_wages).max(0);
+                let free = cash.checked_sub(committed_wages).unwrap_or(0).max(0);
                 let bid = self
                     .tables
                     .money
