@@ -241,6 +241,8 @@ pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
             Rate::Day,
             Box::new(sim_people::WorkingAgeSystem::new(
                 defs.labor.min_working_age_years,
+                defs.skills.school.start_age_years,
+                defs.skills.school.end_age_years,
                 ticks_per_year(defs),
             )),
         );
@@ -307,6 +309,11 @@ pub fn build_simulation(
             spec.citizens,
             ticks_per_year(defs),
             defs.labor.min_working_age_years,
+            (
+                defs.skills.school.start_age_years,
+                defs.skills.school.end_age_years,
+            ),
+            defs.skills.skills.len(),
         )?;
         // World genesis (order fixed: public locations, then homes —
         // deterministic entity indices). Household member lists are read

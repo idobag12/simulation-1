@@ -107,14 +107,25 @@ pub fn validate_town(world: &World, config: &PeopleConfig) -> Result<(), EcsErro
 /// Age only grows, so the marker is never removed.
 pub struct WorkingAgeSystem {
     min_working_age_years: u32,
+    school_start_age_years: u32,
+    school_end_age_years: u32,
     ticks_per_year: u64,
 }
 
 impl WorkingAgeSystem {
-    /// Builds from the labor threshold and the calendar's year length.
-    pub fn new(min_working_age_years: u32, ticks_per_year: u64) -> Self {
+    /// Builds from the labor threshold, the school ages (Phase 7,
+    /// ADR 0010 §1 — the same birthday pass maintains `SchoolAge`), and
+    /// the calendar's year length.
+    pub fn new(
+        min_working_age_years: u32,
+        school_start_age_years: u32,
+        school_end_age_years: u32,
+        ticks_per_year: u64,
+    ) -> Self {
         WorkingAgeSystem {
             min_working_age_years,
+            school_start_age_years,
+            school_end_age_years,
             ticks_per_year,
         }
     }
@@ -131,14 +142,32 @@ impl System for WorkingAgeSystem {
         ctx: &TickContext,
         _cmd: &mut CommandBuffer,
     ) -> Result<(), EcsError> {
-        // Pass 1 (immutable): find citizens of age without the marker.
+        // Pass 1 (immutable): find citizens of age without the marker,
+        // plus school-age transitions (Phase 7, ADR 0010 §1) — the same
+        // birthday pass maintains both markers.
         let mut newly_of_age: Vec<Entity> = Vec::new();
+        let mut into_school: Vec<Entity> = Vec::new();
+        let mut out_of_school: Vec<Entity> = Vec::new();
         for (entity, identity) in world.iter::<Identity>()? {
-            if identity.age_years(ctx.tick, self.ticks_per_year) >= self.min_working_age_years
-                && world.get::<WorkingAge>(entity)?.is_none()
-            {
+            let age = identity.age_years(ctx.tick, self.ticks_per_year);
+            if age >= self.min_working_age_years && world.get::<WorkingAge>(entity)?.is_none() {
                 newly_of_age.push(entity);
             }
+            let school_age = age >= self.school_start_age_years && age < self.school_end_age_years;
+            let marked = world
+                .get::<core_ecs::sim_interface::SchoolAge>(entity)?
+                .is_some();
+            if school_age && !marked {
+                into_school.push(entity);
+            } else if !school_age && marked {
+                out_of_school.push(entity);
+            }
+        }
+        for entity in into_school {
+            world.insert(entity, core_ecs::sim_interface::SchoolAge)?;
+        }
+        for entity in out_of_school {
+            world.remove::<core_ecs::sim_interface::SchoolAge>(entity)?;
         }
         // Pass 2: stamp — and the new adult leaves the nest (ADR 0009
         // §3: new adults are the rental market's demand margin). A
@@ -395,6 +424,9 @@ mod tests {
             .register::<core_ecs::sim_interface::Residence>()
             .expect("register");
         world.register::<Ownership>().expect("register");
+        world
+            .register::<core_ecs::sim_interface::SchoolAge>()
+            .expect("register");
         let child = world.spawn();
         // Born exactly 16 years before tick YEAR: at tick 0 they are 15,
         // at tick YEAR they turn 16.
@@ -410,7 +442,7 @@ mod tests {
             )
             .expect("insert");
 
-        let mut system = WorkingAgeSystem::new(16, YEAR);
+        let mut system = WorkingAgeSystem::new(16, 6, 16, YEAR);
         let mut cmd = CommandBuffer::new();
         let at = |tick: u64| TickContext {
             tick: Ticks::new(tick),
@@ -448,6 +480,9 @@ mod tests {
         world.register::<Wallet>().expect("register");
         world.register::<BankBook>().expect("register");
         world.register::<Ownership>().expect("register");
+        world
+            .register::<core_ecs::sim_interface::SchoolAge>()
+            .expect("register");
         world
             .register::<core_ecs::sim_interface::TreasuryBook>()
             .expect("register");

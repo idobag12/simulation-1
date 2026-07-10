@@ -19,7 +19,9 @@ pub mod config;
 pub mod events;
 pub mod genesis;
 pub mod systems;
+pub mod systems_social;
 
 pub use components::{Household, HouseholdMember, Identity, NeedLevel, Needs, Personality, Sex};
 pub use events::{DeathCause, PersonDied};
 pub use systems::{MortalitySystem, NeedsDecaySystem, WorkingAgeSystem, validate_town};
+pub use systems_social::{FERTILITY_STREAM, FertilitySystem, MarriageSystem};

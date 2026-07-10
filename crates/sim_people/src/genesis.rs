@@ -43,6 +43,8 @@ pub fn populate(
     count: u32,
     ticks_per_year: u64,
     min_working_age_years: u32,
+    school_ages: (u32, u32),
+    skill_count: usize,
 ) -> Result<(), EcsError> {
     let mut remaining = count;
     while remaining > 0 {
@@ -66,6 +68,8 @@ pub fn populate(
                 &family_name,
                 ticks_per_year,
                 min_working_age_years,
+                school_ages,
+                skill_count,
             )?;
             world.insert(
                 citizen,
@@ -96,6 +100,8 @@ fn spawn_citizen(
     family_name: &str,
     ticks_per_year: u64,
     min_working_age_years: u32,
+    school_ages: (u32, u32),
+    skill_count: usize,
 ) -> Result<Entity, EcsError> {
     // Sex.
     let sex_draw = world.rng(GENESIS_STREAM).next_u64();
@@ -165,6 +171,17 @@ fn spawn_citizen(
     world.insert(citizen, core_ecs::sim_interface::Wallet { cash })?;
     if age_years >= u64::from(min_working_age_years) {
         world.insert(citizen, core_ecs::sim_interface::WorkingAge)?;
+    }
+    // Phase 7 (ADR 0010 §1): everyone can learn; the school-age window
+    // is stamped like working age.
+    world.insert(
+        citizen,
+        core_ecs::sim_interface::Skills {
+            levels: vec![0; skill_count],
+        },
+    )?;
+    if age_years >= u64::from(school_ages.0) && age_years < u64::from(school_ages.1) {
+        world.insert(citizen, core_ecs::sim_interface::SchoolAge)?;
     }
     Ok(citizen)
 }

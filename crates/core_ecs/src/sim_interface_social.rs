@@ -62,6 +62,72 @@ impl Component for Relationships {
     const STORAGE: StorageKind = StorageKind::Sparse;
 }
 
+impl RelKind {
+    /// A stable ordering discriminant (the edge sort key's second term).
+    pub const fn order(self) -> u8 {
+        match self {
+            RelKind::Kin => 0,
+            RelKind::Spouse => 1,
+            RelKind::Friend => 2,
+            RelKind::Romance => 3,
+        }
+    }
+}
+
+impl Relationships {
+    /// The strength of the `(other, kind)` edge, if present.
+    pub fn strength(&self, other: Entity, kind: RelKind) -> Option<i32> {
+        self.edges
+            .iter()
+            .find(|edge| edge.other == other && edge.kind as u8 == kind as u8)
+            .map(|edge| edge.strength_per_mille)
+    }
+
+    /// Upserts an edge (clamped to `0..=1000`), keeping the vector in
+    /// (other index, kind order) order and the CAP enforced: when full,
+    /// the weakest Friend/Romance edge evicts (kin and spouses never
+    /// do); a new edge weaker than everything is simply not recorded.
+    pub fn upsert(&mut self, other: Entity, kind: RelKind, strength_per_mille: i32, cap: usize) {
+        let strength = strength_per_mille.clamp(0, 1000);
+        if let Some(edge) = self
+            .edges
+            .iter_mut()
+            .find(|edge| edge.other == other && edge.kind as u8 == kind as u8)
+        {
+            edge.strength_per_mille = strength;
+            return;
+        }
+        if self.edges.len() >= cap {
+            let weakest = self
+                .edges
+                .iter()
+                .enumerate()
+                .filter(|(_, edge)| matches!(edge.kind, RelKind::Friend | RelKind::Romance))
+                .min_by_key(|(_, edge)| (edge.strength_per_mille, edge.other.index()))
+                .map(|(index, edge)| (index, edge.strength_per_mille));
+            match weakest {
+                Some((index, weakest_strength)) if weakest_strength < strength => {
+                    self.edges.remove(index);
+                }
+                _ => return, // full of stronger bonds: the new edge is not recorded
+            }
+        }
+        self.edges.push(Edge {
+            other,
+            kind,
+            strength_per_mille: strength,
+        });
+        self.edges
+            .sort_by_key(|edge| (edge.other.index(), edge.kind.order()));
+    }
+
+    /// Removes the `(other, kind)` edge if present.
+    pub fn remove(&mut self, other: Entity, kind: RelKind) {
+        self.edges
+            .retain(|edge| !(edge.other == other && edge.kind as u8 == kind as u8));
+    }
+}
+
 /// Believed retail prices (ADR 0010 §3): what this citizen THINKS each
 /// shop charges — written by purchases, exchanged by gossip, read by
 /// purchase scoring. Bounded by data; rows in shop entity-index order.
