@@ -216,6 +216,29 @@ impl Events {
         }
     }
 
+    /// The COARSE tick-start transition (Phase 8, ADR 0011 §5): rotates
+    /// pending emissions into the readable set and logs them (the
+    /// record survives catch-up), but DEFERS scheduled entries — no
+    /// tick-rate system runs during a coarse stride to read them, and
+    /// draining them here would destroy scheduled chains (the fixture
+    /// alarm re-arms only when READ). Everything left scheduled fires,
+    /// late but intact, at the first normal `begin_tick` after the
+    /// caught-up span.
+    pub fn begin_tick_coarse(&mut self, tick: Ticks) {
+        self.readable.clear();
+        self.readable.append(&mut self.pending);
+        for (type_index, bytes) in &self.readable {
+            self.log.push_back(LogEntry {
+                tick,
+                type_index: *type_index,
+                bytes: bytes.clone(),
+            });
+        }
+        while self.log.len() > self.log_capacity {
+            self.log.pop_front();
+        }
+    }
+
     /// The retained log, oldest first, with resolved event names.
     /// Observability only (debugger, narrative composer); simulation
     /// systems must not read it (ADR 0004 §5).

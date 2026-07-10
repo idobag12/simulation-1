@@ -5,11 +5,12 @@
 //! tier, which is what makes A↔C cycling conserve money exactly.
 
 use core_ecs::sim_interface::{
-    Beliefs, Born, DayModel, Employment, Fired, LoanDefaulted, Location, LodTier, Married, Needs,
-    Position, Residence, RetailOffer, SchoolAge, SchoolAttended, Skills, Spotlight, Tier,
-    TierChanged,
+    Born, DayModel, Employment, Fired, LoanDefaulted, LodTier, Married, Needs, Position, Residence,
+    Spotlight, Tier, TierChanged,
 };
 use core_ecs::{CommandBuffer, EcsError, Entity, System, TickContext, World};
+use std::cmp::Reverse;
+
 use core_types::calendar::{MINUTES_PER_HOUR, TICKS_PER_DAY};
 
 use crate::components::{CurrentAction, DailyPlan, LastDecision};
@@ -66,7 +67,10 @@ impl System for SpotlightSystem {
         let until_tick = ctx.tick.raw() + u64::from(self.highlight_days) * TICKS_PER_DAY;
         newsworthy.sort_by_key(|citizen| citizen.index());
         for citizen in newsworthy {
-            if world.is_alive(citizen) {
+            // Citizens only (Needs is the citizen signal): firms borrow
+            // and default too, and a firm must not carry citizen-LOD
+            // state into saves and hashes.
+            if world.is_alive(citizen) && world.get::<Needs>(citizen)?.is_some() {
                 world.insert(citizen, Spotlight { until_tick })?;
             }
         }
@@ -160,6 +164,7 @@ impl System for TierAssignSystem {
                     promote(world, citizen)?;
                 }
                 (Tier::C, Tier::B) => {
+                    world.remove::<DayModel>(citizen)?;
                     park_at_home(world, citizen)?;
                 }
                 // Same tier: only the first stamp reaches here.
@@ -184,11 +189,15 @@ impl System for TierAssignSystem {
 fn demote(world: &mut World, citizen: Entity, tables: &AiTables, to: Tier) -> Result<(), EcsError> {
     world.remove::<CurrentAction>(citizen)?;
     world.remove::<LastDecision>(citizen)?;
+    // Only Tier C runs the day model (ADR 0011 §3, amended); Tier B
+    // keeps its DailyPlan (it executes the plan's sleep window) and
+    // carries no model — persisted state nothing reads would be dead
+    // weight in every save and hash.
     if matches!(to, Tier::C) {
         world.remove::<DailyPlan>(citizen)?;
+        let model = build_day_model(world, citizen, tables)?;
+        world.insert(citizen, model)?;
     }
-    let model = build_day_model(world, citizen, tables)?;
-    world.insert(citizen, model)?;
     park_at_home(world, citizen)?;
     Ok(())
 }
@@ -203,9 +212,18 @@ fn promote(world: &mut World, citizen: Entity) -> Result<(), EcsError> {
     Ok(())
 }
 
-fn park_at_home(world: &mut World, citizen: Entity) -> Result<(), EcsError> {
-    if let Some(home) = world.get::<Residence>(citizen)?.map(|r| r.home) {
-        world.insert(citizen, Position { at: home })?;
+pub(crate) fn park_at_home(world: &mut World, citizen: Entity) -> Result<(), EcsError> {
+    match world.get::<Residence>(citizen)?.map(|r| r.home) {
+        Some(home) => {
+            world.insert(citizen, Position { at: home })?;
+        }
+        // A roofless coarse citizen is NOWHERE — leaving them standing
+        // at their last venue would make an ever-present ghost the
+        // social hour keeps meeting (and Tier C skips decay, so those
+        // bonds would only grow).
+        None => {
+            world.remove::<Position>(citizen)?;
+        }
     }
     Ok(())
 }
@@ -214,24 +232,39 @@ fn park_at_home(world: &mut World, citizen: Entity) -> Result<(), EcsError> {
 /// satisfier tables and the citizen's job: home rates over the base
 /// sleep window, the best public venue's rates over the data leisure
 /// block, and the work-need gain over the shift when employed.
-fn build_day_model(
+pub(crate) fn build_day_model(
     world: &World,
     citizen: Entity,
     tables: &AiTables,
 ) -> Result<DayModel, EcsError> {
     let need_count = tables.need_trait.len();
-    let day_minutes = (24 * MINUTES_PER_HOUR) as u16;
+    let day_minutes = (core_types::calendar::HOURS_PER_DAY * MINUTES_PER_HOUR) as u16;
     let sleep_minutes = i64::from(
         (tables.sleep_end_minute + day_minutes - tables.sleep_start_minute) % day_minutes,
     );
     let leisure_minutes = i64::from(tables.lod.leisure_hours_per_day) * MINUTES_PER_HOUR as i64;
-    let home_kind = tables.kind_is_home.iter().position(|is_home| *is_home);
-    let mut passive_gain_per_day = Vec::with_capacity(need_count);
-    for need in 0..need_count as u32 {
-        let home_rate = home_kind
-            .and_then(|kind| tables.satisfier_rate(kind as u32, need))
-            .unwrap_or(0);
-        let venue_rate = (0..tables.kind_satisfiers.len() as u32)
+    // Home gains require a HOME (rough sleepers get nothing from the
+    // sleep window — homelessness must not stop mattering at demotion).
+    let home_kind = if world.get::<Residence>(citizen)?.is_some() {
+        tables.kind_is_home.iter().position(|is_home| *is_home)
+    } else {
+        None
+    };
+    // ONE leisure venue for the block (ADR 0011 §3): the kind best
+    // satisfying the citizen's most deficient need at derivation. A
+    // per-need best-venue sum would credit the same minutes once per
+    // need — a citizen present everywhere at once, over-satisfied days,
+    // and structurally deflated Tier C retail demand.
+    let most_deficient: Option<u32> = world.get::<Needs>(citizen)?.and_then(|needs| {
+        needs
+            .levels
+            .iter()
+            .enumerate()
+            .min_by_key(|(index, level)| (level.raw(), *index))
+            .map(|(index, _)| index as u32)
+    });
+    let leisure_kind: Option<u32> = most_deficient.and_then(|need| {
+        (0..tables.kind_satisfiers.len() as u32)
             .filter(|kind| {
                 !tables
                     .kind_is_home
@@ -239,8 +272,21 @@ fn build_day_model(
                     .copied()
                     .unwrap_or(false)
             })
-            .filter_map(|kind| tables.satisfier_rate(kind, need))
-            .max()
+            .filter(|kind| tables.satisfier_rate(*kind, need).is_some())
+            .max_by_key(|kind| {
+                (
+                    tables.satisfier_rate(*kind, need).unwrap_or(0),
+                    Reverse(*kind),
+                )
+            })
+    });
+    let mut passive_gain_per_day = Vec::with_capacity(need_count);
+    for need in 0..need_count as u32 {
+        let home_rate = home_kind
+            .and_then(|kind| tables.satisfier_rate(kind as u32, need))
+            .unwrap_or(0);
+        let venue_rate = leisure_kind
+            .and_then(|kind| tables.satisfier_rate(kind, need))
             .unwrap_or(0);
         let mut gain = home_rate * sleep_minutes + venue_rate * leisure_minutes;
         if need == tables.work_need && world.get::<Employment>(citizen)?.is_some() {
@@ -254,351 +300,9 @@ fn build_day_model(
     })
 }
 
-/// A retail snapshot shared by the coarse integrators: per offer, the
-/// seller and the need it satisfies (entity order — deterministic).
-fn offer_snapshot(world: &World) -> Result<Vec<(Entity, RetailOffer)>, EcsError> {
-    let mut offers = Vec::new();
-    for (seller, offer) in world.iter::<RetailOffer>()? {
-        offers.push((seller, *offer));
-    }
-    Ok(offers)
-}
-
-/// The cheapest KNOWN seller for `need` — believed price when the buyer
-/// has one, posted price otherwise (the same knowledge Tier A's scoring
-/// uses; ADR 0011 §2). Ties break on entity order.
-fn cheapest_for_need(
-    world: &World,
-    buyer: Entity,
-    need: u32,
-    offers: &[(Entity, RetailOffer)],
-) -> Result<Option<(Entity, RetailOffer)>, EcsError> {
-    let beliefs = world.get::<Beliefs>(buyer)?;
-    let mut best: Option<(i64, Entity, RetailOffer)> = None;
-    for (seller, offer) in offers {
-        if offer.need_index != need || offer.gain_per_unit <= 0 {
-            continue;
-        }
-        let believed = beliefs
-            .and_then(|beliefs| {
-                beliefs
-                    .prices
-                    .iter()
-                    .find(|(shop, _)| shop == seller)
-                    .map(|(_, price)| price.mills())
-            })
-            .unwrap_or(offer.unit_price.mills());
-        if best.is_none_or(|(price, _, _)| believed < price) {
-            best = Some((believed, *seller, *offer));
-        }
-    }
-    Ok(best.map(|(_, seller, offer)| (seller, offer)))
-}
-
-/// Applies the school day to a coarse pupil: the taught skill rises by
-/// the data gain and the fact lands — the same growth an embodied
-/// attendance produces (ADR 0011 §2).
-fn attend_school_abstractly(
-    world: &mut World,
-    pupil: Entity,
-    tables: &AiTables,
-) -> Result<(), EcsError> {
-    let mut skills = world
-        .get::<Skills>(pupil)?
-        .cloned()
-        .unwrap_or(Skills { levels: Vec::new() });
-    if skills.levels.len() < tables.skill_count as usize {
-        skills.levels.resize(tables.skill_count as usize, 0);
-    }
-    let Some(level) = skills
-        .levels
-        .get_mut(tables.school_taught_skill as usize)
-        .copied()
-        .map(|level| level.saturating_add(tables.school_gain_per_mille).min(1000))
-    else {
-        return Ok(());
-    };
-    skills.levels[tables.school_taught_skill as usize] = level;
-    world.insert(pupil, skills)?;
-    world.emit(&SchoolAttended {
-        pupil,
-        skill: tables.school_taught_skill,
-        new_level: level,
-    })?;
-    Ok(())
-}
-
-/// Hour-rate system (ADR 0011 §2): executes each Tier B citizen's day
-/// as blocks from the SAME obligations the embodied biases read — the
-/// sleep window at home, the shift at the workplace, school in its
-/// hours, else leisure at the venue best satisfying the most deficient
-/// need. Needs integrate analytically (rate × 60, exact integers), one
-/// real purchase may resolve per hour, and Position genuinely moves —
-/// Tier B citizens keep appearing in the Phase 7 social hour.
-pub struct TierBSystem {
-    tables: AiTables,
-}
-
-impl TierBSystem {
-    /// Builds from the resolved tables.
-    pub fn new(tables: AiTables) -> Self {
-        TierBSystem { tables }
-    }
-}
-
-impl System for TierBSystem {
-    fn name(&self) -> &'static str {
-        "lod.tier_b"
-    }
-
-    fn run(
-        &mut self,
-        world: &mut World,
-        ctx: &TickContext,
-        _cmd: &mut CommandBuffer,
-    ) -> Result<(), EcsError> {
-        let minute_of_day =
-            u16::from(ctx.time.hour) * (MINUTES_PER_HOUR as u16) + u16::from(ctx.time.minute);
-        let citizens: Vec<Entity> = world
-            .iter::<LodTier>()?
-            .filter(|(_, row)| matches!(row.tier, Tier::B))
-            .map(|(citizen, _)| citizen)
-            .collect();
-        if citizens.is_empty() {
-            return Ok(());
-        }
-        // Venue-by-kind snapshot (first location of each kind) and the
-        // retail offers, both in entity order.
-        let mut venue_of_kind: Vec<Option<Entity>> = vec![None; self.tables.kind_satisfiers.len()];
-        for (venue, location) in world.iter::<Location>()? {
-            if let Some(slot) = venue_of_kind.get_mut(location.kind as usize)
-                && slot.is_none()
-            {
-                *slot = Some(venue);
-            }
-        }
-        let school = venue_of_kind
-            .get(self.tables.school_location_kind as usize)
-            .copied()
-            .flatten();
-        let offers = offer_snapshot(world)?;
-        let hour_gain = |rate: i64| rate * MINUTES_PER_HOUR as i64;
-
-        for citizen in citizens {
-            // No compiled plan yet (freshly demoted): the base data
-            // window, with the same midnight-crossing semantics.
-            let asleep = world
-                .get::<DailyPlan>(citizen)?
-                .map(|plan| plan.in_sleep_window(minute_of_day))
-                .unwrap_or_else(|| {
-                    DailyPlan {
-                        sleep_start_minute: self.tables.sleep_start_minute,
-                        sleep_end_minute: self.tables.sleep_end_minute,
-                    }
-                    .in_sleep_window(minute_of_day)
-                });
-            let workplace = world
-                .get::<Employment>(citizen)?
-                .map(|employment| employment.employer);
-            let in_work_window = minute_of_day >= self.tables.work_start_minute
-                && minute_of_day < self.tables.work_end_minute;
-            let in_school_window = minute_of_day >= self.tables.school_start_minute
-                && minute_of_day < self.tables.school_end_minute;
-            let school_age = world.get::<SchoolAge>(citizen)?.is_some();
-
-            if asleep {
-                // The night block: home, home rates.
-                park_at_home(world, citizen)?;
-                let home_kind = self.tables.kind_is_home.iter().position(|h| *h);
-                if let Some(kind) = home_kind {
-                    apply_kind_gains(world, citizen, &self.tables, kind as u32, hour_gain)?;
-                }
-                continue;
-            }
-            if let (Some(workplace), true) = (workplace, in_work_window) {
-                world.insert(citizen, Position { at: workplace })?;
-                let gain = hour_gain(self.tables.work_need_per_tick);
-                bump_need(world, citizen, self.tables.work_need, gain)?;
-                continue;
-            }
-            if school_age && in_school_window {
-                if let Some(school) = school {
-                    world.insert(citizen, Position { at: school })?;
-                    if minute_of_day == self.tables.school_start_minute {
-                        attend_school_abstractly(world, citizen, &self.tables)?;
-                    }
-                }
-                continue;
-            }
-            // The leisure block: the venue best satisfying the most
-            // deficient need; one real purchase may resolve first.
-            let needs: Vec<i64> = world
-                .get::<Needs>(citizen)?
-                .map(|needs| needs.levels.iter().map(|level| level.raw()).collect())
-                .unwrap_or_default();
-            let Some((need, _)) = needs
-                .iter()
-                .enumerate()
-                .min_by_key(|(index, level)| (**level, *index))
-            else {
-                continue;
-            };
-            let need = need as u32;
-            if let Some((seller, offer)) = cheapest_for_need(world, citizen, need, &offers)?
-                && core_ecs::sim_interface::NeedLevel::MAX.raw() - needs[need as usize]
-                    >= offer.gain_per_unit
-            {
-                crate::systems::purchase_unit(
-                    world,
-                    citizen,
-                    seller,
-                    self.tables.sales_tax_per_mille,
-                    self.tables.social.belief_cap as usize,
-                )?;
-                continue;
-            }
-            let best_kind = (0..self.tables.kind_satisfiers.len() as u32)
-                .filter(|kind| {
-                    !self
-                        .tables
-                        .kind_is_home
-                        .get(*kind as usize)
-                        .copied()
-                        .unwrap_or(false)
-                })
-                .filter(|kind| self.tables.satisfier_rate(*kind, need).is_some())
-                .max_by_key(|kind| self.tables.satisfier_rate(*kind, need).unwrap_or(0));
-            if let Some(kind) = best_kind
-                && let Some(venue) = venue_of_kind.get(kind as usize).copied().flatten()
-            {
-                world.insert(citizen, Position { at: venue })?;
-                apply_kind_gains(world, citizen, &self.tables, kind, hour_gain)?;
-            } else {
-                park_at_home(world, citizen)?;
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Applies every satisfier of `kind` to the citizen for one block.
-fn apply_kind_gains(
-    world: &mut World,
-    citizen: Entity,
-    tables: &AiTables,
-    kind: u32,
-    block: impl Fn(i64) -> i64,
-) -> Result<(), EcsError> {
-    let gains: Vec<(u32, i64)> = tables
-        .kind_satisfiers
-        .get(kind as usize)
-        .map(|satisfiers| {
-            satisfiers
-                .iter()
-                .map(|(need, rate)| (*need, block(*rate)))
-                .collect()
-        })
-        .unwrap_or_default();
-    for (need, gain) in gains {
-        bump_need(world, citizen, need, gain)?;
-    }
-    Ok(())
-}
-
-fn bump_need(world: &mut World, citizen: Entity, need: u32, gain: i64) -> Result<(), EcsError> {
-    if let Some(needs) = world.get_mut::<Needs>(citizen)?
-        && let Some(level) = needs.levels.get_mut(need as usize)
-    {
-        *level = level.gain(gain);
-    }
-    Ok(())
-}
-
-/// Day-rate system (ADR 0011 §§2–3): executes each Tier C citizen's
-/// `DayModel` once per day — real purchases for the deficits retail can
-/// satisfy (cheapest known shop, unit by unit, through the shared
-/// till), the model's passive gains for the rest, the school day for
-/// school-age citizens, and the abstract day ends at home. Employment,
-/// payroll, rent, and the lifecycle run unchanged around it.
-pub struct TierCSystem {
-    tables: AiTables,
-}
-
-impl TierCSystem {
-    /// Builds from the resolved tables.
-    pub fn new(tables: AiTables) -> Self {
-        TierCSystem { tables }
-    }
-}
-
-impl System for TierCSystem {
-    fn name(&self) -> &'static str {
-        "lod.tier_c"
-    }
-
-    fn run(
-        &mut self,
-        world: &mut World,
-        _ctx: &TickContext,
-        _cmd: &mut CommandBuffer,
-    ) -> Result<(), EcsError> {
-        let citizens: Vec<Entity> = world
-            .iter::<LodTier>()?
-            .filter(|(_, row)| matches!(row.tier, Tier::C))
-            .map(|(citizen, _)| citizen)
-            .collect();
-        if citizens.is_empty() {
-            return Ok(());
-        }
-        let offers = offer_snapshot(world)?;
-        let school_exists = world
-            .iter::<Location>()?
-            .any(|(_, location)| location.kind == self.tables.school_location_kind);
-        for citizen in citizens {
-            // The model refreshes daily (jobs change; ADR 0011 §3).
-            let model = build_day_model(world, citizen, &self.tables)?;
-            let need_count = model.passive_gain_per_day.len();
-            // Purchases first: retail covers what presence cannot.
-            for need in 0..need_count as u32 {
-                loop {
-                    let level = world
-                        .get::<Needs>(citizen)?
-                        .and_then(|needs| needs.levels.get(need as usize).copied())
-                        .map(|level| level.raw())
-                        .unwrap_or(core_ecs::sim_interface::NeedLevel::MAX.raw());
-                    let deficit = core_ecs::sim_interface::NeedLevel::MAX.raw() - level;
-                    let Some((seller, offer)) = cheapest_for_need(world, citizen, need, &offers)?
-                    else {
-                        break;
-                    };
-                    if deficit < offer.gain_per_unit {
-                        break;
-                    }
-                    let bought = crate::systems::purchase_unit(
-                        world,
-                        citizen,
-                        seller,
-                        self.tables.sales_tax_per_mille,
-                        self.tables.social.belief_cap as usize,
-                    )?;
-                    if bought.is_none() {
-                        break;
-                    }
-                }
-            }
-            // Passive presence: the model's analytic day.
-            for (need, gain) in model.passive_gain_per_day.iter().enumerate() {
-                bump_need(world, citizen, need as u32, *gain)?;
-            }
-            world.insert(citizen, model)?;
-            if school_exists && world.get::<SchoolAge>(citizen)?.is_some() {
-                attend_school_abstractly(world, citizen, &self.tables)?;
-            }
-            park_at_home(world, citizen)?;
-        }
-        Ok(())
-    }
-}
+#[path = "systems_lod_tiers.rs"]
+mod tiers;
+pub use tiers::{TierBSystem, TierCSystem};
 
 /// Demotes EVERY citizen to Tier C through the normal demotion path —
 /// the catch-up controller's entry (SPEC §5: catch-up is simply
@@ -629,4 +333,276 @@ pub fn demote_all_to_c(world: &mut World, tables: &AiTables) -> Result<(), EcsEr
         })?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core_ecs::sim_interface::NeedLevel;
+    use core_types::{CalendarTime, Seed, Ticks};
+
+    pub(crate) fn test_tables() -> AiTables {
+        AiTables {
+            travel_ticks: 1,
+            urgency_exponent: 2,
+            time_cost_micro_per_tick: 0,
+            max_perform_ticks: 10,
+            idle_ticks: 1,
+            plan_compile_hour: 0,
+            sleep_start_minute: 1320, // 22:00 — the window crosses midnight
+            sleep_end_minute: 360,    // 06:00 (8 hours)
+            sleep_max_shift_minutes: 0,
+            sleep_shift_trait: 0,
+            rest_need: 0,
+            sleep_home_bias_micro: 0,
+            // Kind 0 = home (rest 2000/tick); kind 1 = venue (social
+            // 5000/tick); two needs: rest (0), social (1).
+            kind_is_home: vec![true, false],
+            kind_satisfiers: vec![vec![(0, 2000)], vec![(1, 5000)]],
+            need_trait: vec![None, None],
+            mu_scale_micro: 0,
+            half_wealth_mills: 1,
+            work_start_minute: 480,
+            work_end_minute: 960,
+            work_bias_micro: 0,
+            work_ticks: 1,
+            work_need: 1,
+            work_need_per_tick: 100,
+            sales_tax_per_mille: 0,
+            school_start_minute: 0,
+            school_end_minute: 0,
+            school_bias_micro: 0,
+            school_attend_ticks: 1,
+            school_location_kind: 1,
+            school_taught_skill: 0,
+            school_gain_per_mille: 0,
+            social: crate::config::SocialTables {
+                edge_cap: 8,
+                friend_drift_per_meeting_per_mille: 30,
+                romance_drift_per_meeting_per_mille: 25,
+                decay_per_day_per_mille: 5,
+                romance_min_sociability_product_per_mille: 90,
+                marriage_threshold_per_mille: 700,
+                social_bond_weight_per_mille: 400,
+                belief_cap: 8,
+                drift_need: 1,
+                spark_trait: 0,
+            },
+            skill_count: 1,
+            lod: crate::config::LodTables {
+                tier_a_cap: 2,
+                tier_b_cap: 1,
+                highlight_days: 1,
+                leisure_hours_per_day: 4,
+            },
+        }
+    }
+
+    fn world() -> World {
+        let mut world = World::new(Seed::new(41), 64);
+        world.register::<Needs>().expect("register");
+        world.register::<Position>().expect("register");
+        world.register::<Residence>().expect("register");
+        world.register::<Employment>().expect("register");
+        world.register::<LodTier>().expect("register");
+        world.register::<DayModel>().expect("register");
+        world.register::<Spotlight>().expect("register");
+        world
+            .register::<crate::components::CurrentAction>()
+            .expect("register");
+        world
+            .register::<crate::components::DailyPlan>()
+            .expect("register");
+        world
+            .register::<crate::components::LastDecision>()
+            .expect("register");
+        world.register_event::<TierChanged>().expect("register");
+        world
+    }
+
+    fn citizen(world: &mut World) -> Entity {
+        let entity = world.spawn();
+        world
+            .insert(
+                entity,
+                Needs {
+                    levels: vec![NeedLevel::new_clamped(0); 2],
+                },
+            )
+            .expect("insert");
+        entity
+    }
+
+    fn ctx_at(tick: u64) -> TickContext {
+        TickContext {
+            tick: Ticks::new(tick),
+            time: CalendarTime::START,
+        }
+    }
+
+    /// ADR 0011 §3: the model derives from the roof, the job, and the
+    /// data — a roofless citizen's sleep window yields NOTHING, a
+    /// jobless one carries no work term, and the leisure block credits
+    /// exactly ONE venue (the most deficient need's best).
+    #[test]
+    fn the_day_model_derives_from_roof_job_and_data() {
+        let mut world = world();
+        let housed = citizen(&mut world);
+        let home = world.spawn();
+        world.insert(housed, Residence { home }).expect("insert");
+        let firm = world.spawn();
+        world
+            .insert(
+                housed,
+                Employment {
+                    employer: firm,
+                    wage_per_day: core_types::Money::from_mills(100),
+                },
+            )
+            .expect("insert");
+        // Both needs at 0: need 0 (rest) is the most deficient by
+        // tie-break, so the leisure venue is chosen for it — kind 1
+        // satisfies only social, and NO kind satisfies rest away from
+        // home, so the leisure term lands on nothing for rest and
+        // nothing for social (one venue, chosen for the deficient need).
+        let model = build_day_model(&world, housed, &test_tables()).expect("model");
+        // Sleep window = 8h = 480 minutes at rest 2000/tick.
+        assert_eq!(model.passive_gain_per_day[0], 2000 * 480);
+        // Work need (1): shift 480 minutes × 100/tick; no venue term
+        // (the leisure venue was picked for need 0, which no venue
+        // serves — the block credits ONE venue, never one per need).
+        assert_eq!(model.passive_gain_per_day[1], 100 * 480);
+
+        // Roofless: the sleep term vanishes with the roof.
+        let roofless = citizen(&mut world);
+        let model = build_day_model(&world, roofless, &test_tables()).expect("model");
+        assert_eq!(model.passive_gain_per_day[0], 0);
+        // …and with need 0 still deficient and unservable by venues,
+        // the social need gains nothing passively either (jobless too).
+        assert_eq!(model.passive_gain_per_day[1], 0);
+
+        // A citizen whose deficient need IS venue-served gets the block.
+        let social_case = citizen(&mut world);
+        world
+            .get_mut::<Needs>(social_case)
+            .expect("query")
+            .expect("needs")
+            .levels[0] = NeedLevel::MAX;
+        let model = build_day_model(&world, social_case, &test_tables()).expect("model");
+        assert_eq!(
+            model.passive_gain_per_day[1],
+            5000 * i64::from(test_tables().lod.leisure_hours_per_day) * 60
+        );
+    }
+
+    /// ADR 0011 §1: pins jump the queue; pins beyond the cap WAIT in
+    /// entity order (no panic, no eviction of other pins); expiry lands
+    /// exactly at `until_tick`.
+    #[test]
+    fn pins_jump_the_queue_and_expire_exactly() {
+        let mut world = world();
+        let citizens: Vec<Entity> = (0..5).map(|_| citizen(&mut world)).collect();
+        // Pin the LAST three (entity order within pins preserved).
+        for pinned in &citizens[2..5] {
+            world
+                .insert(*pinned, Spotlight { until_tick: 100 })
+                .expect("insert");
+        }
+        let mut assign = TierAssignSystem::new(test_tables());
+        assign
+            .run(&mut world, &ctx_at(0), &mut CommandBuffer::new())
+            .expect("assign");
+        let tier = |world: &World, citizen: Entity| {
+            world
+                .get::<LodTier>(citizen)
+                .expect("query")
+                .map(|row| row.tier)
+        };
+        // Caps 2/1: pins fill A first (citizens 2, 3), the third pin
+        // (4) WAITS at the front of B, the unpinned front (0) takes the
+        // B remainder... and 1 is C.
+        assert_eq!(tier(&world, citizens[2]), Some(Tier::A));
+        assert_eq!(tier(&world, citizens[3]), Some(Tier::A));
+        assert_eq!(tier(&world, citizens[4]), Some(Tier::B));
+        assert_eq!(tier(&world, citizens[0]), Some(Tier::C));
+        assert_eq!(tier(&world, citizens[1]), Some(Tier::C));
+
+        // Expiry is exact: at tick 99 the pins hold; at 100 they drop
+        // and the stable front (entity order) takes over.
+        assign
+            .run(&mut world, &ctx_at(99), &mut CommandBuffer::new())
+            .expect("assign");
+        assert_eq!(tier(&world, citizens[2]), Some(Tier::A));
+        assign
+            .run(&mut world, &ctx_at(100), &mut CommandBuffer::new())
+            .expect("assign");
+        assert_eq!(
+            world.get::<Spotlight>(citizens[2]).expect("query"),
+            None,
+            "the pin dropped exactly at its tick"
+        );
+        assert_eq!(tier(&world, citizens[0]), Some(Tier::A));
+        assert_eq!(tier(&world, citizens[1]), Some(Tier::A));
+        assert_eq!(tier(&world, citizens[2]), Some(Tier::B));
+        assert_eq!(tier(&world, citizens[3]), Some(Tier::C));
+    }
+
+    /// ADR 0011 §4: demotion to C strips the embodied rows and writes
+    /// the model; demotion to B keeps the plan and carries NO model;
+    /// promotion drops the model and touches nothing else.
+    #[test]
+    fn transitions_carry_exactly_the_documented_state() {
+        let mut world = world();
+        let subject = citizen(&mut world);
+        let home = world.spawn();
+        world.insert(subject, Residence { home }).expect("insert");
+        world
+            .insert(
+                subject,
+                crate::components::DailyPlan {
+                    sleep_start_minute: 0,
+                    sleep_end_minute: 1,
+                },
+            )
+            .expect("insert");
+        world
+            .insert(
+                subject,
+                crate::components::CurrentAction::Idle { remaining: 3 },
+            )
+            .expect("insert");
+        demote(&mut world, subject, &test_tables(), Tier::B).expect("demote");
+        assert!(
+            world
+                .get::<crate::components::CurrentAction>(subject)
+                .expect("query")
+                .is_none()
+        );
+        assert!(
+            world
+                .get::<crate::components::DailyPlan>(subject)
+                .expect("query")
+                .is_some(),
+            "Tier B executes the plan's sleep window — the plan stays"
+        );
+        assert!(
+            world.get::<DayModel>(subject).expect("query").is_none(),
+            "only Tier C carries the model"
+        );
+        demote(&mut world, subject, &test_tables(), Tier::C).expect("demote");
+        assert!(
+            world
+                .get::<crate::components::DailyPlan>(subject)
+                .expect("query")
+                .is_none()
+        );
+        assert!(world.get::<DayModel>(subject).expect("query").is_some());
+        promote(&mut world, subject).expect("promote");
+        assert!(world.get::<DayModel>(subject).expect("query").is_none());
+        assert_eq!(
+            world.get::<Position>(subject).expect("query").map(|p| p.at),
+            Some(home),
+            "promotion materializes the citizen at home"
+        );
+    }
 }

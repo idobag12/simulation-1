@@ -482,9 +482,9 @@ pub(crate) fn validate_lod(
     if lod.highlight_days == 0 {
         return Err(e("highlight_days must be >= 1".into()));
     }
-    if lod.leisure_hours_per_day >= 24 {
+    if u64::from(lod.leisure_hours_per_day) >= core_types::calendar::HOURS_PER_DAY {
         return Err(e(
-            "leisure_hours_per_day must be < 24 (a day also sleeps)".into()
+            "leisure_hours_per_day must fit inside the day (a day also sleeps)".into(),
         ));
     }
     if lod.macro_tolerance_per_mille > 1000 {

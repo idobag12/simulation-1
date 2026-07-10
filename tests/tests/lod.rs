@@ -17,9 +17,10 @@ use sim_people::Identity;
 
 const TICKS_PER_DAY: u64 = 1440;
 
-/// One day's macro sample: employment, seekers, mean posted price,
-/// treasury receipts, total citizen money (all mills or counts).
-type MacroSample = (i64, i64, i64, i64, i64);
+/// One day's macro sample: employment rate (per-mille of citizens),
+/// seekers, mean posted price (mills), treasury receipts (mills), total
+/// citizen money (mills), and cumulative units consumed by citizens.
+type MacroSample = (i64, i64, i64, i64, i64, i64);
 type SeriesPick = dyn Fn(&MacroSample) -> i64;
 
 fn tier_counts(world: &core_ecs::World) -> (usize, usize, usize) {
@@ -153,24 +154,128 @@ fn a_to_c_to_a_cycling_conserves_money_exactly() {
     let (a, b, c) = tier_counts(sim.world());
     assert_eq!((b, c), (0, 0), "everyone is embodied again ({a} A)");
 
-    // Integrated: a tiered town cycles citizens for a week under the
-    // scheduled DAILY AUDIT — finishing is the conservation proof.
-    let mut defs = pinned_defs();
-    defs.lod.tier_a_cap = 15;
-    defs.lod.tier_b_cap = 25;
-    let (mut sim, mut schedule) =
-        runner::build_simulation(&WorldSpec::town(Seed::new(227), 120), &defs).expect("build");
-    sim.run_ticks(&mut schedule, 7 * TICKS_PER_DAY)
+    // Integrated: a PROVEN A→C→A cycle inside the live schedule, under
+    // the daily audit, with the cycled citizen's needs checked against
+    // the all-Tier-A twin (ADR 0011 §8, as amended). Caps 15/0 make the
+    // displacement direct (A↔C, no B stop), and a spotlight pin forces
+    // the cycle deterministically: pinning a Tier C citizen pushes the
+    // BACK of the embodied front out to C; the pin's expiry brings them
+    // home to A.
+    let tier_of = |sim: &sim_time::Simulation, citizen: core_ecs::Entity| {
+        sim.world()
+            .get::<LodTier>(citizen)
+            .expect("query")
+            .map(|row| row.tier)
+    };
+    let build = |a_cap: u32| {
+        let mut defs = pinned_defs();
+        defs.lod.tier_a_cap = a_cap;
+        defs.lod.tier_b_cap = 0;
+        runner::build_simulation(&WorldSpec::town(Seed::new(227), 120), &defs).expect("build")
+    };
+    let (mut sim, mut schedule) = build(15);
+    // The all-Tier-A twin: same seed, same data, caps beyond the town.
+    let (mut twin, mut twin_schedule) = build(1_000_000);
+    sim.run_ticks(&mut schedule, 2 * TICKS_PER_DAY)
         .expect("a halted run means a daily audit failed");
-    let world = sim.world();
-    let (a, b, c) = tier_counts(world);
-    assert!(a > 0 && b > 0 && c > 0, "mixed tiers ({a}/{b}/{c})");
-    assert!(
-        debug_tools::audit_economy(world).expect("audit"),
-        "every conservation identity holds over a cycling week"
+    twin.run_ticks(&mut twin_schedule, 2 * TICKS_PER_DAY)
+        .expect("twin");
+    // The victim: the back of the embodied front (highest-index Tier A
+    // citizen) — the first displaced when a pin jumps the queue.
+    let victim = sim
+        .world()
+        .iter::<LodTier>()
+        .expect("query")
+        .filter(|(_, row)| matches!(row.tier, Tier::A))
+        .map(|(citizen, _)| citizen)
+        .max_by_key(|citizen| citizen.index())
+        .expect("an embodied citizen exists");
+    let pinned = sim
+        .world()
+        .iter::<LodTier>()
+        .expect("query")
+        .find(|(_, row)| matches!(row.tier, Tier::C))
+        .map(|(citizen, _)| citizen)
+        .expect("a statistical citizen exists");
+    assert_eq!(tier_of(&sim, victim), Some(Tier::A));
+    // Pin through day 2's boundary; expiry lands exactly on day 3's
+    // (the assignment drops pins with `until_tick <= boundary`).
+    sim.world_mut()
+        .insert(
+            pinned,
+            Spotlight {
+                until_tick: 3 * TICKS_PER_DAY,
+            },
+        )
+        .expect("insert");
+    sim.run_ticks(&mut schedule, TICKS_PER_DAY).expect("run");
+    twin.run_ticks(&mut twin_schedule, TICKS_PER_DAY)
+        .expect("twin");
+    assert_eq!(tier_of(&sim, pinned), Some(Tier::A), "the pin promoted C→A");
+    assert_eq!(
+        tier_of(&sim, victim),
+        Some(Tier::C),
+        "the displaced front citizen demoted A→C"
     );
-    // Statistical citizens live real economic lives: some hold jobs and
-    // real money moved through their wallets.
+    sim.run_ticks(&mut schedule, TICKS_PER_DAY).expect("run");
+    twin.run_ticks(&mut twin_schedule, TICKS_PER_DAY)
+        .expect("twin");
+    assert_eq!(
+        tier_of(&sim, victim),
+        Some(Tier::A),
+        "the pin expired and the cycle closed: A→C→A inside the live \
+         schedule, every boundary audited"
+    );
+    assert_eq!(tier_of(&sim, pinned), Some(Tier::C));
+    assert!(
+        debug_tools::audit_economy(sim.world()).expect("audit"),
+        "every conservation identity holds through the forced cycle"
+    );
+    // Needs within the data tolerance after re-promotion: the cycled
+    // citizen against their all-Tier-A twin self at the same tick.
+    let needs_of = |sim: &sim_time::Simulation, citizen: core_ecs::Entity| -> Vec<i64> {
+        sim.world()
+            .get::<sim_people::Needs>(citizen)
+            .expect("query")
+            .map(|needs| needs.levels.iter().map(|level| level.raw()).collect())
+            .unwrap_or_default()
+    };
+    let tolerance = i64::from(pinned_defs().lod.macro_tolerance_per_mille);
+    let max = core_ecs::sim_interface::NeedLevel::MAX.raw();
+    for (need, (cycled, embodied)) in needs_of(&sim, victim)
+        .iter()
+        .zip(needs_of(&twin, victim).iter())
+        .enumerate()
+    {
+        // A need's instantaneous level swings on the TIMING of its
+        // last satisfaction alone — bread lands once, hours apart, in
+        // two honest micro-timelines; an hour at the fireside does the
+        // same for venue needs. The band allows the acceptance
+        // tolerance plus one satisfaction quantum (a unit's gain, or
+        // one hour-block at the best satisfier).
+        let unit_quantum = sim
+            .world()
+            .iter::<RetailOffer>()
+            .expect("query")
+            .filter(|(_, offer)| offer.need_index == need as u32)
+            .map(|(_, offer)| offer.gain_per_unit)
+            .max()
+            .unwrap_or(0);
+        let tables = data_defs::resolve_ai(&pinned_defs());
+        let block_quantum = (0..tables.kind_satisfiers.len() as u32)
+            .filter_map(|kind| tables.satisfier_rate(kind, need as u32))
+            .max()
+            .unwrap_or(0)
+            * 60;
+        let quantum = unit_quantum.max(block_quantum);
+        assert!(
+            (cycled - embodied).abs() <= tolerance * max / 1000 + quantum,
+            "need {need}: cycled {cycled} vs embodied twin {embodied} \
+             exceeds the tolerance band plus one purchase quantum"
+        );
+    }
+    // Statistical citizens live real economic lives: some hold jobs.
+    let world = sim.world();
     let employed_c = world
         .iter::<LodTier>()
         .expect("query")
@@ -234,6 +339,7 @@ fn a_week_of_catchup_is_deterministic_and_conserves() {
 /// (mills), treasury receipts (mills), and total citizen money (wallet
 /// + deposit rows, mills).
 fn macro_sample(world: &core_ecs::World) -> MacroSample {
+    let population = world.iter::<Identity>().expect("query").count().max(1) as i64;
     let employed = world.iter::<Employment>().expect("query").count() as i64;
     let seeking = world
         .iter::<LaborStats>()
@@ -278,7 +384,20 @@ fn macro_sample(world: &core_ecs::World) -> MacroSample {
             .unwrap_or(0);
         citizen_money += deposits.get(&citizen.index()).copied().unwrap_or(0);
     }
-    (employed, seeking, mean_price, receipts, citizen_money)
+    let consumed: i64 = world
+        .iter::<core_ecs::sim_interface::EconCounters>()
+        .expect("query")
+        .next()
+        .map(|(_, counters)| counters.consumed_by_citizens.iter().sum())
+        .unwrap_or(0);
+    (
+        employed * 1000 / population,
+        seeking,
+        mean_price,
+        receipts,
+        citizen_money,
+        consumed,
+    )
 }
 
 /// Exit criterion — macro time-series statistically indistinguishable
@@ -288,41 +407,68 @@ fn macro_sample(world: &core_ecs::World) -> MacroSample {
 /// the run must agree within the tolerance.
 #[test]
 fn tiered_macro_series_match_the_all_tier_a_twin() {
-    let run = |a_cap: u32, b_cap: u32| -> Vec<MacroSample> {
+    let run = |seed: u64, a_cap: u32, b_cap: u32| -> Vec<MacroSample> {
         let mut defs = pinned_defs();
         defs.lod.tier_a_cap = a_cap;
         defs.lod.tier_b_cap = b_cap;
         let (mut sim, mut schedule) =
-            runner::build_simulation(&WorldSpec::town(Seed::new(233), 150), &defs).expect("build");
+            runner::build_simulation(&WorldSpec::town(Seed::new(seed), 150), &defs).expect("build");
+        // Four unmeasured warm-up days: genesis needs are full, so the
+        // integrators' cold starts differ by construction (embodied
+        // citizens top up opportunistically; the day model waits for a
+        // deficit) — the criterion is the STEADY state's agreement.
+        sim.run_ticks(&mut schedule, 4 * TICKS_PER_DAY)
+            .expect("run");
         let mut series = Vec::new();
+        let mut previous = macro_sample(sim.world());
         for _ in 0..12 {
             sim.run_ticks(&mut schedule, TICKS_PER_DAY).expect("run");
-            series.push(macro_sample(sim.world()));
+            let sample = macro_sample(sim.world());
+            // The cumulative counters (receipts, consumption) compare
+            // as PER-DAY deltas — a level comparison would smear one
+            // early divergence over every later day.
+            series.push((
+                sample.0,
+                sample.1,
+                sample.2,
+                sample.3 - previous.3,
+                sample.4,
+                sample.5 - previous.5,
+            ));
+            previous = sample;
         }
         series
     };
-    let embodied = run(1_000_000, 0);
-    let tiered = run(20, 40);
-
     let tolerance = i64::from(pinned_defs().lod.macro_tolerance_per_mille);
-    let mean = |pick: &SeriesPick, series: &[MacroSample]| {
-        series.iter().map(pick).sum::<i64>() / series.len() as i64
-    };
-    let series: [(&str, &SeriesPick); 5] = [
-        ("employment", &|sample| sample.0),
+    let series: [(&str, &SeriesPick); 6] = [
+        ("employment rate", &|sample| sample.0),
         ("seekers", &|sample| sample.1),
         ("mean price", &|sample| sample.2),
-        ("treasury receipts", &|sample| sample.3),
+        ("treasury receipts per day", &|sample| sample.3),
         ("citizen money", &|sample| sample.4),
+        ("units consumed per day", &|sample| sample.5),
     ];
-    for (name, pick) in series {
-        let a = mean(pick, &embodied);
-        let b = mean(pick, &tiered);
-        let scale = a.abs().max(b.abs()).max(1);
-        assert!(
-            (a - b).abs() * 1000 <= tolerance * scale,
-            "{name}: all-A {a} vs tiered {b} exceeds the {tolerance}/1000 band"
-        );
+    // Several seeds, compared PER DAY (a run-mean comparison would let
+    // opposite-sign daily divergences cancel): the mean daily relative
+    // difference of each series must sit inside the data band.
+    for seed in [233u64, 331, 433] {
+        let embodied = run(seed, 1_000_000, 0);
+        let tiered = run(seed, 20, 40);
+        for (name, pick) in series {
+            let mut relative_sum = 0i64;
+            for (a_day, b_day) in embodied.iter().zip(tiered.iter()) {
+                let a = pick(a_day);
+                let b = pick(b_day);
+                let scale = a.abs().max(b.abs()).max(1);
+                relative_sum += (a - b).abs() * 1000 / scale;
+            }
+            let mean_relative = relative_sum / embodied.len() as i64;
+            assert!(
+                mean_relative <= tolerance,
+                "seed {seed}, {name}: mean daily divergence {mean_relative}/1000 \
+                 exceeds the {tolerance}/1000 band"
+            );
+        }
     }
 }
 

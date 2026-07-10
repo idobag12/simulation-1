@@ -327,11 +327,16 @@ fn build_schedule_inner(spec: &WorldSpec, defs: &DataDefs, catchup: bool) -> Sch
             Box::new(sim_economy::PricingSystem::new(econ.clone())),
         );
         // Tier C's day models spend at today's prices (Phase 8,
-        // ADR 0011 §2), before spoilage sweeps the shelves.
-        schedule.add_system(
-            Rate::Day,
-            Box::new(sim_ai::TierCSystem::new(tables.clone())),
-        );
+        // ADR 0011 §2), before spoilage sweeps the shelves. The
+        // catch-up variant also integrates citizens born mid-span —
+        // the omitted assignment never stamps them, and "everyone runs
+        // Tier C" must include a newborn (ADR 0011 §5).
+        let tier_c = if catchup {
+            sim_ai::TierCSystem::for_catchup(tables.clone())
+        } else {
+            sim_ai::TierCSystem::new(tables.clone())
+        };
+        schedule.add_system(Rate::Day, Box::new(tier_c));
         schedule.add_system(
             Rate::Day,
             Box::new(sim_goods::SpoilageSystem::new(econ.spoil_per_mille.clone())),
@@ -381,11 +386,19 @@ fn build_schedule_inner(spec: &WorldSpec, defs: &DataDefs, catchup: bool) -> Sch
 /// boundary's assignment restores tiers. Deterministic; budget-tested
 /// by the Phase 8 exit suite (one week at 10k citizens < 5s).
 pub fn catch_up(sim: &mut Simulation, defs: &DataDefs, days: u64) -> Result<(), EcsError> {
+    if days == 0 {
+        return Ok(()); // a zero-length span must not even demote
+    }
+    let ticks = days.checked_mul(TICKS_PER_DAY).ok_or(EcsError::Arithmetic(
+        core_types::ArithmeticError::Overflow {
+            op: "catch-up span",
+        },
+    ))?;
     let tables = data_defs::resolve_ai(defs);
     sim_ai::demote_all_to_c(sim.world_mut(), &tables)?;
     let derived = derive_spec_from_world(sim.world())?;
     let mut schedule = build_catchup_schedule(&derived, defs);
-    sim.run_ticks_coarse(&mut schedule, days * TICKS_PER_DAY)
+    sim.run_ticks_coarse(&mut schedule, ticks)
 }
 
 /// Assembles a fresh simulation (registrations, populations, calendar) and

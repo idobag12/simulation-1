@@ -165,9 +165,12 @@ impl Simulation {
     /// advances `count` ticks in HOUR strides. Boundary-rate systems
     /// run exactly where and in the order the normal loop would run
     /// them; tick-rate systems are skipped — per-tick agent behavior is
-    /// what the day models replace. Scheduled events due mid-stride
-    /// fire at the next stride's start (`begin_tick` drains everything
-    /// due). Deterministic: a DEFINED coarse integrator, not a skip —
+    /// what the day models replace. Pending emissions rotate and LOG at
+    /// every stride (the record survives); scheduled entries are
+    /// DEFERRED — only tick-rate systems read the bus, so delivery
+    /// waits for the first normal tick after the span, late but intact
+    /// (a drained-but-unread chain would die). Deterministic: a DEFINED
+    /// coarse integrator, not a skip —
     /// the same state caught up the same span always lands identically,
     /// but it is NOT tick-equivalent to the full loop.
     pub fn run_ticks_coarse(
@@ -175,14 +178,15 @@ impl Simulation {
         schedule: &mut Schedule,
         count: u64,
     ) -> Result<(), EcsError> {
-        let ticks_per_hour = core_types::calendar::TICKS_PER_DAY / 24;
+        let ticks_per_hour =
+            core_types::calendar::TICKS_PER_DAY / core_types::calendar::HOURS_PER_DAY;
         let target = self.tick.try_add(count)?;
         while self.tick < target {
             let ctx = TickContext {
                 tick: self.tick,
                 time: self.calendar.time_of(self.tick),
             };
-            self.world.begin_tick(self.tick);
+            self.world.begin_tick_coarse(self.tick);
             schedule.run_tick_coarse(&mut self.world, &ctx)?;
             // Stride to the next hour boundary (or the target).
             let next_boundary = (self.tick.raw() / ticks_per_hour + 1) * ticks_per_hour;

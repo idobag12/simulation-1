@@ -325,6 +325,20 @@ fn validate_firms(
                     ),
                 ));
             }
+            // A unit gain beyond a FULL need is unreachable by the
+            // coarse tiers' whole-unit purchase gates (Phase 8): the
+            // embodied buyer clamps, the day model would starve.
+            if retail.gain_per_unit > 1_000_000 {
+                return Err(verr(
+                    data_root,
+                    file,
+                    format!(
+                        "firm kind `{}` retail gain_per_unit exceeds a full need \
+                         (1_000_000 per-million)",
+                        firm.id
+                    ),
+                ));
+            }
         }
     }
     // Every good has a producer (ADR 0007 §7): some firm kind's recipe

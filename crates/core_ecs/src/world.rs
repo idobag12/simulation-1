@@ -239,6 +239,13 @@ impl World {
         self.events.begin_tick(tick);
     }
 
+    /// The coarse tick-start transition (Phase 8, ADR 0011 §5): pending
+    /// emissions rotate and log; scheduled entries are DEFERRED to the
+    /// first normal tick after the caught-up span.
+    pub fn begin_tick_coarse(&mut self, tick: Ticks) {
+        self.events.begin_tick_coarse(tick);
+    }
+
     /// Read access to the event system (log inspection for tooling).
     pub fn event_system(&self) -> &Events {
         &self.events

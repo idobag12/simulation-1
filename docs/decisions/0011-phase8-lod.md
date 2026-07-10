@@ -32,7 +32,7 @@ the day systems, before the audit), deterministic and in entity order
   the focus rule; the CONTRACT (deterministic, entity-order, capped)
   is what Phase 8 ships.
 - **Event flags**: a citizen touched by a high-signal fact (fired,
-  loan defaulted, married, born to, widowed) is PINNED to Tier A for
+  loan defaulted, married, born to) is PINNED to Tier A for
   `highlight_days`, ahead of the focus fill (the cap still binds;
   pins beyond the cap wait in entity order). This is SPEC §10's
   "currently involved in a high-signal situation". Pins are a
@@ -41,6 +41,11 @@ the day systems, before the audit), deterministic and in entity order
   emitted by day-rate systems, so they are readable exactly one tick
   after the day boundary and the reader is O(readable events) on all
   other ticks; a system-internal pin map would not survive save/load.
+  Pins land on CITIZENS only — firms borrow and default too, and a
+  firm must not carry citizen-LOD state. **Amended:** widowhood does
+  NOT pin — `PersonDied` is a `sim_people`-local event carrying no
+  spouse linkage, and `sim_ai` cannot read it; a widowhood fact can
+  join the pin set if a later phase promotes one to the shared bus.
 
 ## 2. What each tier runs
 
@@ -62,49 +67,79 @@ copy back.
   emitted), else leisure at the venue best satisfying the most
   deficient need (Position moves there — Tier B citizens genuinely
   appear at venues, so the Phase 7 social hour keeps drifting bonds
-  over them). One REAL retail purchase resolves per hour when the
-  block's need has a retail satisfier and the deficit exceeds one
-  unit's gain (the shared purchase path: stock, till, tax, beliefs,
-  counters). Needs gains are the venue's per-tick rate × 60, exact
-  integer, applied once per hour.
+  over them). One REAL retail purchase may resolve per hour, for the
+  most deficient need RETAIL can serve (which need not be the venue
+  need — a hungry citizen buys bread even when loneliness is deeper),
+  when at least half a unit's gain lands (round-to-nearest coverage,
+  like the embodied buyer whose clamped gain wastes the unit's tail).
+  **Amended:** a successful purchase hour replaces the venue visit —
+  the buyer stands at the till (observable presence); a failed one
+  (empty shelf, short wallet) falls through to the venue instead.
+  Needs gains are the venue's per-tick rate × 60, exact integer,
+  applied once per hour; the sleep block's home rates require an
+  actual Residence (an evictee sleeping rough gains nothing —
+  demotion must not repeal homelessness).
 - **Tier C** (per-day, `TierCSystem` in `sim_ai`): each citizen's
   `DayModel` executes once per day: per need in data order, buy the
-  day's deficit from the cheapest KNOWN offer (believed price, posted
-  fallback — the same knowledge Tier A scores with) unit by unit
-  through the shared purchase path (real stock, real money, real tax —
-  SPEC §10 "their demand aggregates into market orders tagged with
-  their identity"), then satisfy the residual with the home/venue
-  rates the model carries (abstract presence — Position stays home).
-  School-age C citizens attend statistically: the school gain lands
-  once per school day. Employment, payroll, rent, mortality,
-  fertility, marriage all run unchanged (they are day-rate already).
+  deficit from the cheapest KNOWN offer (believed price, posted
+  fallback — the same knowledge Tier A scores with) unit by unit,
+  while at least half a unit's gain lands, through the shared purchase
+  path (real stock, real money, real tax — SPEC §10 "their demand
+  aggregates into market orders tagged with their identity"), then
+  satisfy the residual with the home/venue rates the model carries
+  (abstract presence — Position parks at home, or NOWHERE for the
+  roofless: a ghost at their last venue would keep meeting the social
+  hour forever). School-age C citizens attend statistically: the
+  school gain lands once per school day. **Amended:** employed Tier C
+  citizens STAND AT THEIR WORKPLACE through the data shift (two
+  Position writes a day) — production gates batch starts on PRESENT
+  workers, and statistical labor is still real labor (SPEC §10 "labor
+  supplied"); without it a mostly-coarse town's supply collapses and
+  its prices climb away from the embodied twin's. Employment, payroll,
+  rent, mortality, fertility, marriage all run unchanged (they are
+  day-rate already).
 
 ## 3. The DayModel
 
-`DayModel` (shared component `"lod.day_model"`, Sparse — only B/C
-citizens carry one): per-need planned daily gain from passive sources
-(computed from the data satisfier tables: the home's rates over the
-sleep window, the default venue's rates over leisure hours). The LIVE
-`Needs` row remains the trajectory's state — the model never shadows
-it (one source of truth; the hourly decay system and the tier
-integrators write the same row every tier reads). Derived at demotion
-and refreshed daily; it holds NO money and NO inventory.
+`DayModel` (shared component `"lod.day_model"`, Sparse — **amended:**
+only Tier C citizens carry one; Tier B recomputes its blocks from the
+tables hourly, and persisted state nothing reads would be dead weight
+in every save and hash): per-need planned daily gain from passive
+sources — the home's rates over the sleep window (under a REAL roof
+only), and ONE leisure venue's rates over the data leisure block (the
+kind best satisfying the citizen's most deficient need at derivation;
+a per-need best-venue sum would credit the same minutes once per need
+— a citizen present everywhere at once, over-satisfied days, and
+structurally deflated Tier C retail demand), plus the work-need gain
+over the shift when employed. The LIVE `Needs` row remains the
+trajectory's state — the model never shadows it (one source of truth;
+the hourly decay system and the tier integrators write the same row
+every tier reads). Derived at demotion and refreshed daily; it holds
+NO money and NO inventory.
 
 ## 4. Promotion and demotion
 
 Both happen inside `TierAssignSystem`, in entity order, at the day
 boundary:
 
-- **Demote A→B/C**: remove the embodied rows (`CurrentAction`,
-  `Decider` dump, `DailyPlan`), write the `DayModel` from the live
-  needs, park the citizen at home (their Residence, else their
-  current Position). Wallet, employment, tenancy untouched.
+- **Demote A→C**: remove the embodied rows (`CurrentAction`, the
+  decision dump, `DailyPlan`), write the `DayModel`, park the citizen
+  at home (roofless citizens park NOWHERE). **Amended — A→B**: the
+  `DailyPlan` STAYS (Tier B executes the plan's sleep window) and no
+  model is written (§3). Wallet, employment, tenancy untouched.
 - **Promote C/B→A**: drop the `DayModel`, leave needs exactly as the
   coarse integrator last wrote them (the model IS the trajectory —
-  materialization is reading it), place the citizen at home or, mid
-  work shift with a job, at the workplace; no `CurrentAction` — the
-  next tick's DecideSystem decides from the materialized state, which
-  is the same code path a fresh Tier A citizen takes.
+  materialization is reading it), place the citizen at home; no
+  `CurrentAction` — the next tick's DecideSystem decides from the
+  materialized state, which is the same code path a fresh Tier A
+  citizen takes. **Amended:** promotion happens ONLY at the day
+  boundary (the assignment is a day-rate system), where home-at-
+  midnight IS the plausible instantaneous state — so SPEC §10's
+  "deterministically from their RNG stream" needs NO draw (there is
+  nothing stochastic left to sample: needs are live, the position is
+  home, the activity is the next tick's real decision). A mid-day
+  promotion path (viewer focus) would materialize time-of-day state
+  and may draw then; it does not exist in Phase 8.
 - `TierChanged { citizen, from, to }` is emitted for observability.
 
 An A→C→A cycle therefore conserves money EXACTLY (never copied) and
@@ -126,6 +161,23 @@ contract ("replaced by each agent's statistical day model", never "a
 skip"). Surfaced as `embervale run --catch-up-days N` (applied before
 the per-tick run) so a loaded save can fast-forward.
 
+**Amended details (review-driven):**
+
+- Scheduled bus entries are DEFERRED across the span
+  (`begin_tick_coarse` rotates and logs pending emissions but drains
+  nothing): only tick-rate systems read the bus, and a
+  drained-but-unread scheduled chain would die — the fixture alarm
+  re-arms only when READ. Deferred entries fire, late but intact, at
+  the first normal tick after the span.
+- Facts emitted DURING the span do not pin (the spotlight reader is
+  tick-rate and never runs), except the final stride's — still pending
+  at resume, they pin like any fresh news: the newest news is news.
+- Citizens BORN during the span have never met the (omitted)
+  assignment; the catch-up schedule's Tier C variant integrates
+  unassigned citizens too — "everyone runs Tier C" includes newborns.
+- `catch_up(…, 0)` is a no-op (it must not even demote), and the span
+  multiplication is checked arithmetic.
+
 ## 6. Save format v9
 
 Components (append): `lod.tier`, `lod.day_model`, `lod.spotlight`.
@@ -143,8 +195,14 @@ the new data says so.
 `leisure_hours_per_day` (the model's default leisure block), and
 `macro_tolerance_per_mille` (the exit criterion's "defined tolerance"
 — it is an acceptance band, so it is data, like the Phase 2
-demographics bands). Validation: caps and windows positive,
-tolerance ≤ 1000, leisure hours < 24.
+demographics bands; sized by MEASUREMENT, see §8). Validation
+(**amended** to what is actually enforced and why): `tier_a_cap ≥ 1`
+(someone anchors the embodied town) and `highlight_days ≥ 1`;
+`tier_b_cap = 0` and `leisure_hours_per_day = 0` are LEGAL degenerate
+configurations (the all-Tier-A twin and isolation tests depend on
+them); leisure hours fit inside the day; tolerance ≤ 1000. Retail
+`gain_per_unit` is capped at a full need (1,000,000 per-million) so
+the coarse tiers' whole-unit purchase gates stay reachable.
 
 ## 8. Exit criteria mapping
 
@@ -154,21 +212,37 @@ tolerance ≤ 1000, leisure hours < 24.
   `check.sh` gains a release-mode run of the LOD suite so the gate
   enforces it (debug builds skip the timing assert, never the
   correctness asserts).
-- *A↔C cycling conserves money exactly*: force a demote-promote cycle
-  across days (tiny caps make it happen naturally); assert the cycled
-  citizen's wallet+deposit changed ONLY by the real flows the ledger
-  recorded (wages, rent, purchases), the daily audit green throughout,
-  and needs within the data tolerance after re-promotion.
+- *A↔C cycling conserves money exactly* (**amended** to the checks
+  the suite actually proves, stated exactly): (1) the transitions
+  themselves move NOTHING — a full-town demote+promote leaves every
+  wallet and need level byte-identical (money is never copied, so
+  exactness is structural, not reconciled); (2) a FORCED organic
+  A→C→A cycle inside the live schedule (a spotlight pin displaces the
+  back of the embodied front to C; its expiry brings them home) under
+  the daily audit; (3) the cycled citizen's needs against their
+  all-Tier-A twin self within the tolerance PLUS one satisfaction
+  quantum (a unit's gain or one hour-block — instantaneous levels
+  swing on the timing of the last satisfaction alone); (4) Tier C
+  citizens hold real jobs. Per-citizen ledger-flow attribution is not
+  reconciled — the audit's global and per-book identities are the
+  conservation proof, and transitions provably cannot transfer.
 - *Catch-up of one week < 5s*: release-only timing assert around
   `catch_up(…, 7 days)` at 10k citizens; plus (all profiles) the
   coarse integrator's determinism — same save caught up twice gives
   identical hashes — and conservation audits green after catch-up.
-- *Macro time-series indistinguishable*: twin towns, same seed and
-  data, one with caps ≥ population (all-A), one with tiny caps (mixed
-  tiers), run N days; per-day series of employment rate, mean posted
-  price index, treasury receipts, and total citizen money must agree
-  within `macro_tolerance_per_mille` on average (the defined
-  tolerance, in data).
+- *Macro time-series indistinguishable* (**amended** to the shipped
+  definition): THREE seeds; twin towns per seed, all-A vs tiny caps
+  (87% coarse — far beyond the shipped shape); four warm-up days
+  excluded (genesis cold starts differ by construction); then twelve
+  measured days where the MEAN DAILY relative difference of each
+  series — employment rate, seekers, mean posted price, treasury
+  receipts per day, total citizen money, units consumed per day
+  (cumulative counters compare as per-day deltas) — must sit inside
+  `macro_tolerance_per_mille`. The band is 200‰, sized by
+  measurement: every flow series measures ≤ 150‰; the price LEVEL
+  carries a persistent warm-up offset (~170‰ mean, parallel dynamics)
+  at this extreme coarseness. At the shipped caps a small town is
+  all-A — the band only ever binds this stress test.
 
 ## 9. Deferrals (documented)
 
@@ -182,6 +256,12 @@ tolerance ≤ 1000, leisure hours < 24.
   assignment CONTRACT ships now.
 - Deterministic parallelism stays out (SPEC §6: design permits, Phase 8
   does not build it).
+- **Placement** (SPEC §4 lists a `sim_lod` crate): the tier systems
+  live in `sim_ai` because tier execution IS agent behavior — Tier B/C
+  reuse `sim_ai`-private machinery (`purchase_unit`, `CurrentAction`,
+  `DailyPlan`), and SPEC §4 forbids `sim_ → sim_` calls, so a separate
+  crate would force that private machinery into the shared interface.
+  `sim_lod` stays an intentionally empty shell with an honest doc.
 
 ## Dependencies
 

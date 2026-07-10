@@ -142,7 +142,9 @@ const V3_GOLDEN_HASH_AT_LOAD: u64 = 0x6250_4bf9_87c3_b883;
 /// town has no places, so its citizens idle, honestly and deterministically;
 /// the Phase 4 economy systems no-op over its empty stores and the auditor
 /// honestly reports nothing to audit).
-const V3_GOLDEN_HASH_AFTER_1500: u64 = 0xb6d9_de68_c42c_0e6c;
+/// Re-recorded within Phase 8's review fixes (the resumed schedule's
+/// tier systems changed behavior — ADR 0011 §6).
+const V3_GOLDEN_HASH_AFTER_1500: u64 = 0x0ca9_db49_11c1_e70c;
 
 #[test]
 fn v3_golden_save_loads_to_the_exact_golden_state() {
@@ -195,7 +197,9 @@ const V4_GOLDEN_HASH_AT_LOAD: u64 = 0x2417_7aef_63b5_13f6;
 /// Re-recorded with the Phase 7 review fixes: migrated citizens GROW a
 /// social graph as they meet (lived events, nothing invented), so the
 /// drift-dedup and marriage-fidelity fixes move the resume trajectory.
-const V4_GOLDEN_HASH_AFTER_700: u64 = 0x9f82_eb7e_7f31_2a4b;
+/// Re-recorded Phase 8: registration grew to v9 and the resumed
+/// schedule gained the tier systems (ADR 0011 §6).
+const V4_GOLDEN_HASH_AFTER_700: u64 = 0xb7e1_4f63_3559_d476;
 
 #[test]
 fn v4_golden_save_loads_to_the_exact_golden_state() {
@@ -255,7 +259,9 @@ const V5_GOLDEN_HASH_AT_LOAD: u64 = 0x6b39_988b_0713_393d;
 /// Golden hash after resuming the v5 fixture 700 ticks (purchases,
 /// trades, repricing, and the daily audit all run again). Re-recorded
 /// with the Phase 7 review fixes (see the v4 resume note).
-const V5_GOLDEN_HASH_AFTER_700: u64 = 0x3135_19f8_5755_da41;
+/// Re-recorded Phase 8: registration grew to v9 and the resumed
+/// schedule gained the tier systems (ADR 0011 §6).
+const V5_GOLDEN_HASH_AFTER_700: u64 = 0x84c4_0f90_f219_98c4;
 
 #[test]
 fn v5_golden_save_loads_to_the_exact_golden_state() {
@@ -382,7 +388,8 @@ const V6_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v6_seed37_fixture30_citizens250_tick2000.embersave");
 
 /// Golden hash of the v6 fixture at load (re-recorded Phase 7:
-/// registration grew to v8, pinned snapshot data_v9 — ADR 0010 §6).
+/// registration grew to v8, pinned snapshot data_v8 — ADR 0010 §6;
+/// re-recorded Phase 8: registration grew to v9 — ADR 0011 §6).
 const V6_GOLDEN_HASH_AT_LOAD: u64 = 0x0b82_154c_dcfe_22aa;
 
 /// Golden hash after resuming the v6 fixture 1,000 ticks (the rest of
@@ -390,7 +397,9 @@ const V6_GOLDEN_HASH_AT_LOAD: u64 = 0x0b82_154c_dcfe_22aa;
 /// under the Phase 6 day schedule the money systems also run; a
 /// migrated town has no bank or treasury, so they no-op, honestly).
 /// Re-recorded with the Phase 7 review fixes (see the v4 resume note).
-const V6_GOLDEN_HASH_AFTER_1000: u64 = 0xdbba_f4b0_2990_d62d;
+/// Re-recorded Phase 8: registration grew to v9 and the resumed
+/// schedule gained the tier systems (ADR 0011 §6).
+const V6_GOLDEN_HASH_AFTER_1000: u64 = 0xd367_757a_8a7a_91fe;
 
 #[test]
 fn v6_golden_save_loads_to_the_exact_golden_state() {
@@ -467,14 +476,17 @@ fn v6_golden_save_resumes_deterministically() {
 const V7_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v7_seed41_fixture30_citizens250_tick29360.embersave");
 
-/// Golden hash of the v7 fixture at load.
+/// Golden hash of the v7 fixture at load (re-recorded Phase 8:
+/// registration grew to v9 — ADR 0011 §6).
 const V7_GOLDEN_HASH_AT_LOAD: u64 = 0xd5b4_fce2_29e4_8c50;
 
 /// Golden hash after resuming the v7 fixture 1,000 ticks (the rest of
 /// the shift, then the day boundary's audit, bank service/origination,
 /// payroll withholding, clearings, and markets). Re-recorded with the
 /// Phase 7 review fixes (see the v4 resume note).
-const V7_GOLDEN_HASH_AFTER_1000: u64 = 0x51ab_0604_9d32_518e;
+/// Re-recorded Phase 8: registration grew to v9 and the resumed
+/// schedule gained the tier systems (ADR 0011 §6).
+const V7_GOLDEN_HASH_AFTER_1000: u64 = 0x1e1c_90c2_8e0c_ddbc;
 
 #[test]
 fn v7_golden_save_loads_to_the_exact_golden_state() {
@@ -654,13 +666,16 @@ const V8_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v8_seed43_fixture30_citizens250_tick29360.embersave");
 
 /// Golden hash of the v8 fixture at load (fixture regenerated with the
-/// Phase 7 review fixes — the format itself is unchanged).
+/// Phase 7 review fixes; re-recorded Phase 8: registration grew to v9 —
+/// ADR 0011 §6).
 const V8_GOLDEN_HASH_AT_LOAD: u64 = 0xb534_83a6_6c72_2047;
 
 /// Golden hash after resuming the v8 fixture 1,000 ticks (the social
 /// hour drifts bonds, then the day boundary's decay/marriage/fertility
-/// pass runs with everything else).
-const V8_GOLDEN_HASH_AFTER_1000: u64 = 0x9d6b_a261_8676_b3d2;
+/// pass runs with everything else). Re-recorded Phase 8: registration
+/// grew to v9 and the resumed schedule gained the tier systems
+/// (ADR 0011 §6).
+const V8_GOLDEN_HASH_AFTER_1000: u64 = 0x9c33_52db_5087_c512;
 
 #[test]
 fn v8_golden_save_loads_to_the_exact_golden_state() {
@@ -731,12 +746,12 @@ const V9_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v9_seed47_fixture30_citizens2500_tick29360.embersave");
 
 /// Golden hash of the v9 fixture at load.
-const V9_GOLDEN_HASH_AT_LOAD: u64 = 0xfe68_44ea_6cea_b531;
+const V9_GOLDEN_HASH_AT_LOAD: u64 = 0x1d21_b618_9e65_135f;
 
 /// Golden hash after resuming the v9 fixture 1,000 ticks (Tier B hours
 /// and the day-21 boundary's assignment/audit/markets/Tier C day all
 /// run).
-const V9_GOLDEN_HASH_AFTER_1000: u64 = 0x3bc5_2f40_67f2_c804;
+const V9_GOLDEN_HASH_AFTER_1000: u64 = 0xc4da_ff8f_0c0e_8e76;
 
 #[test]
 fn v9_golden_save_loads_to_the_exact_golden_state() {
@@ -767,6 +782,15 @@ fn v9_golden_save_loads_to_the_exact_golden_state() {
             .count()
             > 0,
         "coarse citizens carry day models"
+    );
+    assert!(
+        world
+            .iter::<core_ecs::sim_interface::Spotlight>()
+            .expect("query")
+            .any(|(_, pin)| pin.until_tick > 29360),
+        "the fixture was saved with LIVE spotlight pins — the third v9 \
+         store round-trips real content into the resume golden's day-21 \
+         assignment"
     );
     assert!(
         debug_tools::audit_economy(world).expect("audit"),

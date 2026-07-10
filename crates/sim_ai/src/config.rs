@@ -221,9 +221,10 @@ pub struct LodConfig {
     pub macro_tolerance_per_mille: u32,
 }
 
-/// The resolved LOD tables, carried in [`AiTables`] (identical to the
-/// config today — kept as its own type so resolution stays the one
-/// place data becomes tables, like every other config).
+/// The resolved LOD tables, carried in [`AiTables`]: the RUNTIME
+/// tunables only — `macro_tolerance_per_mille` is deliberately not
+/// resolved (it is the exit suite's acceptance band, read from
+/// `DataDefs` by tests; no system consumes it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LodTables {
     /// See [`LodConfig::tier_a_cap`].

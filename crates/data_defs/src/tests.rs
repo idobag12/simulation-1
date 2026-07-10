@@ -234,3 +234,53 @@ fn calendar_age_overflow_is_rejected_at_load() {
         other => panic!("expected Validation error, got {other:?}"),
     }
 }
+
+/// Phase 8 (ADR 0011 §7): every enforced LOD bound rejects at load
+/// with a precise message — and the retail unit-gain ceiling keeps the
+/// coarse tiers' whole-unit purchase gates reachable.
+#[test]
+fn lod_bounds_are_rejected_at_load_with_precise_messages() {
+    for (content, needle) in [
+        (
+            "LodConfig(tier_a_cap: 0, tier_b_cap: 2000, highlight_days: 3, \
+             leisure_hours_per_day: 4, macro_tolerance_per_mille: 200)",
+            "tier_a_cap",
+        ),
+        (
+            "LodConfig(tier_a_cap: 200, tier_b_cap: 2000, highlight_days: 0, \
+             leisure_hours_per_day: 4, macro_tolerance_per_mille: 200)",
+            "highlight_days",
+        ),
+        (
+            "LodConfig(tier_a_cap: 200, tier_b_cap: 2000, highlight_days: 3, \
+             leisure_hours_per_day: 24, macro_tolerance_per_mille: 200)",
+            "leisure_hours_per_day",
+        ),
+        (
+            "LodConfig(tier_a_cap: 200, tier_b_cap: 2000, highlight_days: 3, \
+             leisure_hours_per_day: 4, macro_tolerance_per_mille: 1001)",
+            "macro_tolerance_per_mille",
+        ),
+    ] {
+        let root = write_tree(&[("balance/lod.ron", content)]);
+        match load(&root) {
+            Err(DataError::Validation { message, .. }) => {
+                assert!(message.contains(needle), "{message}");
+            }
+            other => panic!("expected Validation error for {needle}, got {other:?}"),
+        }
+    }
+    // The retail unit-gain ceiling (a full need, 1e6 per-million).
+    let firms = GOOD_FIRMS.replace("gain_per_unit: 100000", "gain_per_unit: 1000001");
+    assert!(
+        firms != GOOD_FIRMS,
+        "the fixture firm must carry the expected gain"
+    );
+    let root = write_tree(&[("firms.ron", firms.as_str())]);
+    match load(&root) {
+        Err(DataError::Validation { message, .. }) => {
+            assert!(message.contains("exceeds a full need"), "{message}");
+        }
+        other => panic!("expected Validation error, got {other:?}"),
+    }
+}
