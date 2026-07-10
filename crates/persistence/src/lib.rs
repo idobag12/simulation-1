@@ -43,8 +43,9 @@ use thiserror::Error;
 /// v7 = Phase 6 (+ money registrations and events, ADR 0009 §6);
 /// v8 = Phase 7 (+ social registrations and events, ADR 0010 §6);
 /// v9 = Phase 8 (+ LOD registrations and the tier-change event,
-/// ADR 0011 §6).
-pub const FORMAT_VERSION: u32 = 9;
+/// ADR 0011 §6); v10 = Phase 9 (+ the map siting registration and the
+/// housing book's per-district asks, ADR 0012 §4).
+pub const FORMAT_VERSION: u32 = 10;
 
 /// 8-byte file magic identifying an Embervale save.
 pub const MAGIC: &[u8; 8] = b"EMBRSAV1";

@@ -40,6 +40,13 @@ pub(crate) struct Decider {
     /// Believed shop prices `(seller index, mills)` — gossip and
     /// experience shape shop choice (Phase 7, ADR 0010 §3).
     pub(crate) believed: Vec<(u32, i64)>,
+    /// The current location's district (Phase 9, ADR 0012 §2), when
+    /// positioned somewhere sited.
+    pub(crate) district: Option<u32>,
+    /// The home's district (commutes are pair lookups).
+    pub(crate) home_district: Option<u32>,
+    /// The workplace's district.
+    pub(crate) workplace_district: Option<u32>,
 }
 
 /// One retail offer snapshotted for scoring: the selling entity, the
@@ -49,6 +56,8 @@ pub(crate) struct OfferSnapshot {
     pub(crate) seller: Entity,
     pub(crate) offer: RetailOffer,
     pub(crate) stock: i64,
+    /// The shop's district (Phase 9 — buyers pay real travel).
+    pub(crate) district: Option<u32>,
 }
 
 /// Tick-rate system: every citizen without a `CurrentAction` enumerates
@@ -69,56 +78,66 @@ impl DecideSystem {
     /// own home (satisfier data order), public locations (entity order ×
     /// satisfier data order), purchases (retail-entity order), the work
     /// obligation (shift hours only), Idle last.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the decision kernel's full snapshot; a params struct would only rename the locals"
+    )]
     fn decide(
         &self,
         decider: &Decider,
-        publics: &[(Entity, u32)],
+        publics: &[(Entity, u32, Option<u32>)],
         offers: &[OfferSnapshot],
         home_kind: Option<u32>,
         work_window: bool,
         school_window: bool,
+        school_district: Option<u32>,
     ) -> (LastDecision, CurrentAction) {
         let mut candidates: Vec<ScoredCandidate> = Vec::new();
         let mut scores: Vec<f64> = Vec::new();
 
-        let mut push = |location: Entity, kind: u32, decider: &Decider, this: &Self| {
-            let Some(kind_satisfiers) = this.tables.kind_satisfiers.get(kind as usize) else {
-                return;
+        let mut push =
+            |location: Entity, kind: u32, district: Option<u32>, decider: &Decider, this: &Self| {
+                let Some(kind_satisfiers) = this.tables.kind_satisfiers.get(kind as usize) else {
+                    return;
+                };
+                for (need_index, rate) in kind_satisfiers {
+                    let level = decider
+                        .needs
+                        .get(*need_index as usize)
+                        .copied()
+                        .unwrap_or(NEED_MAX);
+                    let travel = if decider.at == Some(location) {
+                        0
+                    } else {
+                        i64::from(this.tables.travel_between(decider.district, district))
+                    };
+                    let own_home_rest =
+                        Some(location) == decider.home && *need_index == this.tables.rest_need;
+                    let score = this.score(
+                        level,
+                        *rate,
+                        travel,
+                        &decider.traits,
+                        *need_index,
+                        own_home_rest,
+                        decider.asleep_window,
+                    );
+                    candidates.push(ScoredCandidate {
+                        action: CandidateAction::Satisfy {
+                            location,
+                            need_index: *need_index,
+                        },
+                        score_micro: quantize(score),
+                    });
+                    scores.push(score);
+                }
             };
-            for (need_index, rate) in kind_satisfiers {
-                let level = decider
-                    .needs
-                    .get(*need_index as usize)
-                    .copied()
-                    .unwrap_or(NEED_MAX);
-                let traveling = decider.at != Some(location);
-                let own_home_rest =
-                    Some(location) == decider.home && *need_index == this.tables.rest_need;
-                let score = this.score(
-                    level,
-                    *rate,
-                    traveling,
-                    &decider.traits,
-                    *need_index,
-                    own_home_rest,
-                    decider.asleep_window,
-                );
-                candidates.push(ScoredCandidate {
-                    action: CandidateAction::Satisfy {
-                        location,
-                        need_index: *need_index,
-                    },
-                    score_micro: quantize(score),
-                });
-                scores.push(score);
-            }
-        };
 
         if let (Some(home), Some(kind)) = (decider.home, home_kind) {
-            push(home, kind, decider, self);
+            push(home, kind, decider.home_district, decider, self);
         }
-        for (location, kind) in publics {
-            push(*location, *kind, decider, self);
+        for (location, kind, district) in publics {
+            push(*location, *kind, *district, decider, self);
         }
         for snapshot in offers {
             // Skipped at decide time (ADR 0007 §6): nothing on the shelf,
@@ -137,7 +156,7 @@ impl DecideSystem {
             scores.push(score);
         }
         if work_window && let Some(workplace) = decider.workplace {
-            let score = self.score_work(decider, workplace);
+            let score = self.score_work(decider, workplace, decider.workplace_district);
             candidates.push(ScoredCandidate {
                 action: CandidateAction::Work {
                     location: workplace,
@@ -147,7 +166,7 @@ impl DecideSystem {
             scores.push(score);
         }
         if school_window && let Some(school) = decider.school {
-            let score = self.score_school(decider, school);
+            let score = self.score_school(decider, school, school_district);
             candidates.push(ScoredCandidate {
                 action: CandidateAction::AttendSchool { location: school },
                 score_micro: quantize(score),
@@ -159,6 +178,31 @@ impl DecideSystem {
             score_micro: 0,
         });
         scores.push(0.0);
+
+        // The chosen target's district (the small snapshot lists — the
+        // travel DURATION must match the scored commute, Phase 9).
+        let travel_to = |location: Entity| -> u32 {
+            let district = if Some(location) == decider.home {
+                decider.home_district
+            } else if Some(location) == decider.workplace {
+                decider.workplace_district
+            } else if Some(location) == decider.school {
+                school_district
+            } else {
+                publics
+                    .iter()
+                    .find(|(entity, _, _)| *entity == location)
+                    .map(|(_, _, district)| *district)
+                    .or_else(|| {
+                        offers
+                            .iter()
+                            .find(|snapshot| snapshot.seller == location)
+                            .map(|snapshot| snapshot.district)
+                    })
+                    .flatten()
+            };
+            self.tables.travel_between(decider.district, district)
+        };
 
         // Argmax with first-wins tie-breaking (enumeration order).
         let mut chosen = 0usize;
@@ -183,7 +227,7 @@ impl DecideSystem {
                     CurrentAction::Travel {
                         target: location,
                         need_index,
-                        remaining: self.tables.travel_ticks,
+                        remaining: travel_to(location),
                     }
                 }
             }
@@ -196,7 +240,7 @@ impl DecideSystem {
                 } else {
                     CurrentAction::BuyTravel {
                         target: location,
-                        remaining: self.tables.travel_ticks,
+                        remaining: travel_to(location),
                     }
                 }
             }
@@ -209,7 +253,7 @@ impl DecideSystem {
                 } else {
                     CurrentAction::WorkTravel {
                         target: location,
-                        remaining: self.tables.travel_ticks,
+                        remaining: travel_to(location),
                     }
                 }
             }
@@ -222,7 +266,7 @@ impl DecideSystem {
                 } else {
                     CurrentAction::SchoolTravel {
                         target: location,
-                        remaining: self.tables.travel_ticks,
+                        remaining: travel_to(location),
                     }
                 }
             }
@@ -268,19 +312,28 @@ impl System for DecideSystem {
             .position(|is_home| *is_home)
             .map(|index| index as u32);
 
-        // Snapshot public locations (entity order).
-        let publics: Vec<(Entity, u32)> = world
-            .iter::<Location>()?
-            .filter(|(_, location)| {
-                !self
-                    .tables
-                    .kind_is_home
-                    .get(location.kind as usize)
-                    .copied()
-                    .unwrap_or(false)
-            })
-            .map(|(entity, location)| (entity, location.kind))
-            .collect();
+        // Snapshot public locations (entity order), with districts
+        // (Phase 9 — a missing `Sited` row falls back to flat travel).
+        let sited = |world: &World, entity: Entity| -> Result<Option<u32>, EcsError> {
+            Ok(world
+                .get::<core_ecs::sim_interface::Sited>(entity)?
+                .map(|sited| sited.district))
+        };
+        let mut publics: Vec<(Entity, u32, Option<u32>)> = Vec::new();
+        for (entity, location) in world.iter::<Location>()? {
+            if !self
+                .tables
+                .kind_is_home
+                .get(location.kind as usize)
+                .copied()
+                .unwrap_or(false)
+            {
+                publics.push((entity, location.kind, None));
+            }
+        }
+        for entry in &mut publics {
+            entry.2 = sited(world, entry.0)?;
+        }
 
         // Snapshot retail offers with their current stock (entity order).
         let offers: Vec<OfferSnapshot> = {
@@ -294,7 +347,11 @@ impl System for DecideSystem {
                     seller,
                     offer: *offer,
                     stock,
+                    district: None,
                 });
+            }
+            for snapshot in &mut list {
+                snapshot.district = sited(world, snapshot.seller)?;
             }
             list
         };
@@ -304,6 +361,10 @@ impl System for DecideSystem {
             .iter::<Location>()?
             .find(|(_, location)| location.kind == self.tables.school_location_kind)
             .map(|(entity, _)| entity);
+        let school_district: Option<u32> = match school_entity {
+            Some(school) => sited(world, school)?,
+            None => None,
+        };
 
         // Deposit balances (Phase 6): wealth = wallet + vault row.
         let mut vault: std::collections::BTreeMap<u32, i64> = std::collections::BTreeMap::new();
@@ -370,7 +431,21 @@ impl System for DecideSystem {
                             .collect()
                     })
                     .unwrap_or_default(),
+                district: None,
+                home_district: None,
+                workplace_district: None,
             });
+        }
+        for decider in &mut deciders {
+            if let Some(at) = decider.at {
+                decider.district = sited(world, at)?;
+            }
+            if let Some(home) = decider.home {
+                decider.home_district = sited(world, home)?;
+            }
+            if let Some(workplace) = decider.workplace {
+                decider.workplace_district = sited(world, workplace)?;
+            }
         }
         let work_window = minute_of_day >= self.tables.work_start_minute
             && minute_of_day < self.tables.work_end_minute;
@@ -386,6 +461,7 @@ impl System for DecideSystem {
                 home_kind,
                 work_window,
                 school_window,
+                school_district,
             );
             dump.tick = ctx.tick;
             world.insert(decider.entity, action)?;

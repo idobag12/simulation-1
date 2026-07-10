@@ -109,6 +109,8 @@ pub struct DataDefs {
     pub fertility: sim_people::config::FertilityConfig,
     /// LOD tiers and catch-up (Phase 8, ADR 0011 §7).
     pub lod: sim_ai::config::LodConfig,
+    /// The town map: districts and travel times (Phase 9, ADR 0012 §1).
+    pub map: sim_world::config::MapConfig,
 }
 
 /// Loads and validates every data definition from a `data/` directory
@@ -142,6 +144,7 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
     let fertility: sim_people::config::FertilityConfig =
         load_ron(&data_root.join("balance/fertility.ron"))?;
     let lod: sim_ai::config::LodConfig = load_ron(&data_root.join("balance/lod.ron"))?;
+    let map: sim_world::config::MapConfig = load_ron(&data_root.join("map.ron"))?;
     validate(data_root, &calendar, &engine)?;
     validate_people(data_root, &calendar, &people)?;
     validate_locations(data_root, &locations, &people)?;
@@ -170,6 +173,7 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
         labor.min_working_age_years,
     )?;
     validate_lod(data_root, &lod)?;
+    validate_map(data_root, &map)?;
     Ok(DataDefs {
         calendar,
         engine,
@@ -188,6 +192,7 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
         social,
         fertility,
         lod,
+        map,
     })
 }
 
@@ -205,10 +210,12 @@ fn load_ron<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T, DataError>
 mod resolve;
 mod validate;
 mod validate_econ;
+mod validate_map;
 mod validate_money;
 pub use resolve::{resolve_ai, resolve_economy};
 use validate::{validate, validate_ai, validate_locations, validate_people};
 use validate_econ::validate_economy;
+use validate_map::validate_map;
 use validate_money::{validate_labor, validate_lod, validate_money, validate_social};
 
 #[cfg(test)]

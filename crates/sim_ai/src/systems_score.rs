@@ -17,7 +17,7 @@ impl DecideSystem {
         &self,
         level: i64,
         rate: i64,
-        traveling: bool,
+        travel_ticks: i64,
         traits: &[i16],
         need_index: u32,
         is_own_home_rest: bool,
@@ -31,11 +31,6 @@ impl DecideSystem {
             return f64::MIN; // nothing to gain: never chosen over Idle (0.0)
         }
         let perform_ticks = recoverable.div_euclid(rate) + i64::from(recoverable % rate != 0);
-        let travel_ticks = if traveling {
-            i64::from(self.tables.travel_ticks)
-        } else {
-            0
-        };
 
         let gain = recoverable as f64 / MICRO;
         let time_cost = (travel_ticks + perform_ticks) as f64
@@ -103,7 +98,10 @@ impl DecideSystem {
         let travel_ticks = if decider.at == Some(snapshot.seller) {
             0
         } else {
-            i64::from(self.tables.travel_ticks)
+            i64::from(
+                self.tables
+                    .travel_between(decider.district, snapshot.district),
+            )
         };
         let gain = recoverable as f64 / MICRO;
         let time_cost = (travel_ticks + i64::from(offer.use_ticks)) as f64
@@ -131,11 +129,16 @@ impl DecideSystem {
     /// bias during the shift, less time cost — strong enough to shape the
     /// day, weak enough that urgent needs still win (obligations bias,
     /// never dictate).
-    pub(crate) fn score_work(&self, decider: &Decider, workplace: Entity) -> f64 {
+    pub(crate) fn score_work(
+        &self,
+        decider: &Decider,
+        workplace: Entity,
+        district: Option<u32>,
+    ) -> f64 {
         let travel_ticks = if decider.at == Some(workplace) {
             0
         } else {
-            i64::from(self.tables.travel_ticks)
+            i64::from(self.tables.travel_between(decider.district, district))
         };
         let time_cost = (travel_ticks + i64::from(self.tables.work_ticks)) as f64
             * self.tables.time_cost_micro_per_tick as f64
@@ -145,11 +148,16 @@ impl DecideSystem {
 
     /// Scores attending school (Phase 7, ADR 0010 §1): the same shape
     /// as the work bias — obligations bias, never dictate.
-    pub(crate) fn score_school(&self, decider: &Decider, school: Entity) -> f64 {
+    pub(crate) fn score_school(
+        &self,
+        decider: &Decider,
+        school: Entity,
+        district: Option<u32>,
+    ) -> f64 {
         let travel_ticks = if decider.at == Some(school) {
             0
         } else {
-            i64::from(self.tables.travel_ticks)
+            i64::from(self.tables.travel_between(decider.district, district))
         };
         let time_cost = (travel_ticks + i64::from(self.tables.school_attend_ticks)) as f64
             * self.tables.time_cost_micro_per_tick as f64

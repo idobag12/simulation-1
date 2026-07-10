@@ -66,14 +66,20 @@ impl Component for BankBook {
 /// steers, and the last purchase-clearing average — the "market price of
 /// homes" the construction hurdle reads (the data floor stands in before
 /// any sale). Prices measured from clearings, never set (SPEC §12).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct HousingBook {
     /// Current rental ask, mills/day (0 = uninitialized; the clearing
-    /// seeds it from the cost-plus floor).
+    /// seeds it from the cost-plus floor). The un-mapped fallback ask
+    /// (and the migrated pre-v10 world's only ask).
     pub rent_ask_mills: i64,
     /// Average price of the last purchase clearing's sales, mills
     /// (0 = no sale yet — the data floor applies).
     pub last_home_price_mills: i64,
+    /// Per-district rental asks (Phase 9, ADR 0012 §3), data order —
+    /// each steered by ITS OWN district's vacancy, so scarce central
+    /// homes genuinely cost more. Empty until the first mapped
+    /// clearing (and forever in un-mapped worlds).
+    pub district_rent_ask_mills: Vec<i64>,
 }
 
 impl Component for HousingBook {

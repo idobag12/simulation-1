@@ -51,3 +51,27 @@ impl LocationsConfig {
             .map(|index| index as u32)
     }
 }
+
+/// One district on the town map (Phase 9, ADR 0012 §1).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DistrictDef {
+    /// Stable identifier, e.g. `"old_town"`.
+    pub id: String,
+}
+
+/// `data/map.ron` — the whole spatial model: districts and the
+/// symmetric travel-time matrix (the matrix IS the path; ADR 0012 §1).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MapConfig {
+    /// Ordered district definitions (data order = the persisted index).
+    pub districts: Vec<DistrictDef>,
+    /// `travel_ticks[from][to]`, districts × districts; validated
+    /// square, symmetric, every entry ≥ 1 (the diagonal is the
+    /// intra-district trip — no teleports) and ≤ one day.
+    pub travel_ticks: Vec<Vec<u32>>,
+    /// What one commute tick costs a housing bidder, mills
+    /// (ADR 0012 §3 — converts distance into money for the clearing).
+    pub commute_mills_per_tick: i64,
+}

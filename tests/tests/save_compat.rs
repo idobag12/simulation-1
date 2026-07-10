@@ -6,7 +6,7 @@
 //! must ship a migration that makes it pass again. Regenerating a fixture
 //! to make a red test green is forbidden without that migration.
 //!
-//! These suites load the FROZEN data snapshot (`fixtures/data_v9/`), never
+//! These suites load the FROZEN data snapshot (`fixtures/data_v10/`), never
 //! the live `data/` directory, so balance edits cannot shift the goldens.
 //!
 //! Golden-hash policy (ADR 0004 §10): when a phase legitimately extends
@@ -20,10 +20,14 @@
 //! ADR 0007 §9), Phase 5 (+labor registrations and events, format v6 —
 //! ADR 0008 §8), Phase 6 (+money registrations and events, format v7 —
 //! ADR 0009 §6), Phase 7 (+social registrations and events, format
-//! v8 — ADR 0010 §6), and Phase 8 (+LOD registrations and the
+//! v8 — ADR 0010 §6), Phase 8 (+LOD registrations and the
 //! tier-change event, format v9 — ADR 0011 §6; the pinned snapshot
 //! moved to `data_v9`, gaining `balance/lod.ron`, and the schedule
-//! gained the tier systems, so town resume trajectories moved with it).
+//! gained the tier systems, so town resume trajectories moved with it),
+//! and Phase 9 (+the map siting registration and the housing book's
+//! per-district asks, format v10 — ADR 0012 §4; the pinned snapshot
+//! moved to `data_v10`, gaining `map.ron`, and travel/housing became
+//! spatial, so town resume trajectories moved with it).
 
 use core_types::{Seed, Ticks, WorldHash};
 use embervale_tests::pinned_defs;
@@ -45,11 +49,14 @@ fn fixture_schedule() -> core_ecs::Schedule {
 const V1_FIXTURE: &[u8] = include_bytes!("../fixtures/v1_seed7_fixture50_tick1000.embersave");
 
 /// Golden hash of the migrated v1 fixture at load (re-recorded Phase 8:
-/// registration grew to v9 — ADR 0011 §6).
-const V1_GOLDEN_HASH_AT_LOAD: u64 = 0x1e35_bdaa_235f_3595;
+/// registration grew to v9 — ADR 0011 §6; re-recorded Phase 9:
+/// registration grew to v10 and the housing book's shape grew, so
+/// every at-load hash moved — ADR 0012 §4. The same reason covers
+/// every constant below re-recorded this phase).
+const V1_GOLDEN_HASH_AT_LOAD: u64 = 0xa3cf_ad29_2490_8773;
 
 /// Golden hash after resuming the migrated v1 world 100 ticks.
-const V1_GOLDEN_HASH_AFTER_100: u64 = 0x2d07_5393_1dbc_dd4d;
+const V1_GOLDEN_HASH_AFTER_100: u64 = 0x8711_132b_fc88_7655;
 
 #[test]
 fn v1_golden_save_loads_through_migration_to_the_golden_state() {
@@ -90,10 +97,10 @@ fn v1_golden_save_resumes_deterministically() {
 const V2_FIXTURE: &[u8] = include_bytes!("../fixtures/v2_seed13_fixture60_tick2000.embersave");
 
 /// Golden hash of the migrated v2 fixture at load (re-recorded Phase 8: registration grew to v9).
-const V2_GOLDEN_HASH_AT_LOAD: u64 = 0x82f1_516a_f8cb_b454;
+const V2_GOLDEN_HASH_AT_LOAD: u64 = 0xf07f_b092_374b_9634;
 
 /// Golden hash after resuming the migrated v2 fixture 100 ticks.
-const V2_GOLDEN_HASH_AFTER_100: u64 = 0xf0ab_1189_d34f_0d30;
+const V2_GOLDEN_HASH_AFTER_100: u64 = 0x06bc_3bff_713e_5530;
 
 #[test]
 fn v2_golden_save_loads_through_migration_to_the_golden_state() {
@@ -134,7 +141,7 @@ const V3_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v3_seed17_fixture40_citizens300_tick3000.embersave");
 
 /// Golden hash of the migrated v3 fixture at load (re-recorded Phase 8: registration grew to v9).
-const V3_GOLDEN_HASH_AT_LOAD: u64 = 0x6250_4bf9_87c3_b883;
+const V3_GOLDEN_HASH_AT_LOAD: u64 = 0x9c78_1b36_3fcd_4c11;
 
 /// Golden hash after resuming the migrated v3 fixture 1,500 ticks
 /// (crossing a day boundary so mortality and needs decay both run again;
@@ -144,7 +151,7 @@ const V3_GOLDEN_HASH_AT_LOAD: u64 = 0x6250_4bf9_87c3_b883;
 /// honestly reports nothing to audit).
 /// Re-recorded within Phase 8's review fixes (the resumed schedule's
 /// tier systems changed behavior — ADR 0011 §6).
-const V3_GOLDEN_HASH_AFTER_1500: u64 = 0x0ca9_db49_11c1_e70c;
+const V3_GOLDEN_HASH_AFTER_1500: u64 = 0xa244_fc71_c041_9d4a;
 
 #[test]
 fn v3_golden_save_loads_to_the_exact_golden_state() {
@@ -188,7 +195,7 @@ const V4_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v4_seed23_fixture30_citizens250_tick2500.embersave");
 
 /// Golden hash of the v4 fixture at load (re-recorded Phase 8: registration grew to v9).
-const V4_GOLDEN_HASH_AT_LOAD: u64 = 0x2417_7aef_63b5_13f6;
+const V4_GOLDEN_HASH_AT_LOAD: u64 = 0x93b2_b5e0_ac8c_d1c6;
 
 /// Golden hash after resuming the v4 fixture 700 ticks (mid-flight
 /// actions complete, new decisions land, needs decay and satisfy — under
@@ -199,7 +206,7 @@ const V4_GOLDEN_HASH_AT_LOAD: u64 = 0x2417_7aef_63b5_13f6;
 /// drift-dedup and marriage-fidelity fixes move the resume trajectory.
 /// Re-recorded Phase 8: registration grew to v9 and the resumed
 /// schedule gained the tier systems (ADR 0011 §6).
-const V4_GOLDEN_HASH_AFTER_700: u64 = 0xb7e1_4f63_3559_d476;
+const V4_GOLDEN_HASH_AFTER_700: u64 = 0x173c_9daf_dfbb_0976;
 
 #[test]
 fn v4_golden_save_loads_to_the_exact_golden_state() {
@@ -254,14 +261,14 @@ const V5_FIXTURE: &[u8] =
 /// stamps real adults, the ledger grows its stats row, and the market
 /// hires — proven semantically by
 /// `v5_migrated_economy_catches_up_with_the_labor_market`).
-const V5_GOLDEN_HASH_AT_LOAD: u64 = 0x6b39_988b_0713_393d;
+const V5_GOLDEN_HASH_AT_LOAD: u64 = 0xdbbc_bccd_3861_6deb;
 
 /// Golden hash after resuming the v5 fixture 700 ticks (purchases,
 /// trades, repricing, and the daily audit all run again). Re-recorded
 /// with the Phase 7 review fixes (see the v4 resume note).
 /// Re-recorded Phase 8: registration grew to v9 and the resumed
 /// schedule gained the tier systems (ADR 0011 §6).
-const V5_GOLDEN_HASH_AFTER_700: u64 = 0x84c4_0f90_f219_98c4;
+const V5_GOLDEN_HASH_AFTER_700: u64 = 0xcd6c_f178_5f24_a7ec;
 
 #[test]
 fn v5_golden_save_loads_to_the_exact_golden_state() {
@@ -390,7 +397,7 @@ const V6_FIXTURE: &[u8] =
 /// Golden hash of the v6 fixture at load (re-recorded Phase 7:
 /// registration grew to v8, pinned snapshot data_v8 — ADR 0010 §6;
 /// re-recorded Phase 8: registration grew to v9 — ADR 0011 §6).
-const V6_GOLDEN_HASH_AT_LOAD: u64 = 0x0b82_154c_dcfe_22aa;
+const V6_GOLDEN_HASH_AT_LOAD: u64 = 0x1083_dab2_73b3_560e;
 
 /// Golden hash after resuming the v6 fixture 1,000 ticks (the rest of
 /// the shift, then the 2,880 day boundary's audit/payroll/clearing —
@@ -399,7 +406,7 @@ const V6_GOLDEN_HASH_AT_LOAD: u64 = 0x0b82_154c_dcfe_22aa;
 /// Re-recorded with the Phase 7 review fixes (see the v4 resume note).
 /// Re-recorded Phase 8: registration grew to v9 and the resumed
 /// schedule gained the tier systems (ADR 0011 §6).
-const V6_GOLDEN_HASH_AFTER_1000: u64 = 0xd367_757a_8a7a_91fe;
+const V6_GOLDEN_HASH_AFTER_1000: u64 = 0x9518_a1a3_55e2_fe8a;
 
 #[test]
 fn v6_golden_save_loads_to_the_exact_golden_state() {
@@ -478,7 +485,7 @@ const V7_FIXTURE: &[u8] =
 
 /// Golden hash of the v7 fixture at load (re-recorded Phase 8:
 /// registration grew to v9 — ADR 0011 §6).
-const V7_GOLDEN_HASH_AT_LOAD: u64 = 0xd5b4_fce2_29e4_8c50;
+const V7_GOLDEN_HASH_AT_LOAD: u64 = 0x996b_957e_8d4e_6b15;
 
 /// Golden hash after resuming the v7 fixture 1,000 ticks (the rest of
 /// the shift, then the day boundary's audit, bank service/origination,
@@ -486,7 +493,7 @@ const V7_GOLDEN_HASH_AT_LOAD: u64 = 0xd5b4_fce2_29e4_8c50;
 /// Phase 7 review fixes (see the v4 resume note).
 /// Re-recorded Phase 8: registration grew to v9 and the resumed
 /// schedule gained the tier systems (ADR 0011 §6).
-const V7_GOLDEN_HASH_AFTER_1000: u64 = 0x1e1c_90c2_8e0c_ddbc;
+const V7_GOLDEN_HASH_AFTER_1000: u64 = 0x303b_6f2c_b355_7d50;
 
 #[test]
 fn v7_golden_save_loads_to_the_exact_golden_state() {
@@ -538,7 +545,7 @@ fn v7_golden_save_loads_to_the_exact_golden_state() {
         .iter::<core_ecs::sim_interface::HousingBook>()
         .expect("query")
         .next()
-        .map(|(_, book)| *book)
+        .map(|(_, book)| book.clone())
         .expect("the v7 fixture has a housing ledger");
     assert!(
         housing.last_home_price_mills > 0,
@@ -668,14 +675,14 @@ const V8_FIXTURE: &[u8] =
 /// Golden hash of the v8 fixture at load (fixture regenerated with the
 /// Phase 7 review fixes; re-recorded Phase 8: registration grew to v9 —
 /// ADR 0011 §6).
-const V8_GOLDEN_HASH_AT_LOAD: u64 = 0xb534_83a6_6c72_2047;
+const V8_GOLDEN_HASH_AT_LOAD: u64 = 0xc6ab_3dc7_ebcb_b1a6;
 
 /// Golden hash after resuming the v8 fixture 1,000 ticks (the social
 /// hour drifts bonds, then the day boundary's decay/marriage/fertility
 /// pass runs with everything else). Re-recorded Phase 8: registration
 /// grew to v9 and the resumed schedule gained the tier systems
 /// (ADR 0011 §6).
-const V8_GOLDEN_HASH_AFTER_1000: u64 = 0x9c33_52db_5087_c512;
+const V8_GOLDEN_HASH_AFTER_1000: u64 = 0x243f_94a2_894c_7bee;
 
 #[test]
 fn v8_golden_save_loads_to_the_exact_golden_state() {
@@ -746,12 +753,12 @@ const V9_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v9_seed47_fixture30_citizens2500_tick29360.embersave");
 
 /// Golden hash of the v9 fixture at load.
-const V9_GOLDEN_HASH_AT_LOAD: u64 = 0x1d21_b618_9e65_135f;
+const V9_GOLDEN_HASH_AT_LOAD: u64 = 0x01b2_2a69_9b11_acb2;
 
 /// Golden hash after resuming the v9 fixture 1,000 ticks (Tier B hours
 /// and the day-21 boundary's assignment/audit/markets/Tier C day all
 /// run).
-const V9_GOLDEN_HASH_AFTER_1000: u64 = 0xc4da_ff8f_0c0e_8e76;
+const V9_GOLDEN_HASH_AFTER_1000: u64 = 0xc57d_462f_8561_30c2;
 
 #[test]
 fn v9_golden_save_loads_to_the_exact_golden_state() {
@@ -792,6 +799,14 @@ fn v9_golden_save_loads_to_the_exact_golden_state() {
          store round-trips real content into the resume golden's day-21 \
          assignment"
     );
+    assert_eq!(
+        world
+            .iter::<core_ecs::sim_interface::Sited>()
+            .expect("query")
+            .count(),
+        0,
+        "migration invents no districts (v10 travel falls back flat)"
+    );
     assert!(
         debug_tools::audit_economy(world).expect("audit"),
         "every conservation identity holds across the tiers"
@@ -815,6 +830,78 @@ fn v9_golden_save_resumes_deterministically() {
     assert_eq!(
         sim.state_hash().expect("hash failed"),
         WorldHash::new(V9_GOLDEN_HASH_AFTER_1000),
+        "resumed evolution diverged from the recording"
+    );
+}
+
+// --- v10 (Phase 9: the town map — districts, spatial housing) -----------
+
+/// Committed v10 fixture: seed 53, 30 fixture entities + 2,500 citizens
+/// on the shipped three-district map, 29,360 ticks — day 20, mid-shift:
+/// every location sited, per-district rent asks steered by real
+/// clearings, tiers live, audits green.
+const V10_FIXTURE: &[u8] =
+    include_bytes!("../fixtures/v10_seed53_fixture30_citizens2500_tick29360.embersave");
+
+/// Golden hash of the v10 fixture at load.
+const V10_GOLDEN_HASH_AT_LOAD: u64 = 0xa64d_afb7_7122_311b;
+
+/// Golden hash after resuming the v10 fixture 1,000 ticks (the rest of
+/// the shift, then the day boundary's assignment, clearings, and
+/// markets — all spatial now).
+const V10_GOLDEN_HASH_AFTER_1000: u64 = 0x99f6_f002_d01a_b657;
+
+#[test]
+fn v10_golden_save_loads_to_the_exact_golden_state() {
+    let sim = persistence::load_from_bytes(V10_FIXTURE, load_config(), runner::register_world)
+        .expect("committed v10 save no longer loads: save-format break without a migration");
+    assert_eq!(sim.tick(), Ticks::new(29360));
+    assert_eq!(sim.seed(), Seed::new(53));
+    let world = sim.world();
+    let sited = world
+        .iter::<core_ecs::sim_interface::Sited>()
+        .expect("query")
+        .count();
+    assert!(sited > 100, "the fixture's town is fully sited ({sited})");
+    let book = world
+        .iter::<core_ecs::sim_interface::HousingBook>()
+        .expect("query")
+        .next()
+        .map(|(_, book)| book.clone())
+        .expect("housing ledger");
+    assert_eq!(
+        book.district_rent_ask_mills.len(),
+        3,
+        "per-district asks are live state"
+    );
+    assert!(
+        book.district_rent_ask_mills.iter().all(|ask| *ask > 0),
+        "every district ask is a real price ({:?})",
+        book.district_rent_ask_mills
+    );
+    assert!(
+        debug_tools::audit_economy(world).expect("audit"),
+        "every conservation identity holds on the map"
+    );
+    assert_eq!(
+        sim.state_hash().expect("hash failed"),
+        WorldHash::new(V10_GOLDEN_HASH_AT_LOAD),
+        "loaded v10 state differs from the state that was saved"
+    );
+}
+
+#[test]
+fn v10_golden_save_resumes_deterministically() {
+    let mut sim = persistence::load_from_bytes(V10_FIXTURE, load_config(), runner::register_world)
+        .expect("committed v10 save no longer loads");
+    let derived = runner::derive_spec_from_world(sim.world()).expect("derive");
+    assert!(derived.fixture);
+    assert!(derived.economy);
+    let mut schedule = runner::build_schedule(&derived, &pinned_defs());
+    sim.run_ticks(&mut schedule, 1000).expect("resume failed");
+    assert_eq!(
+        sim.state_hash().expect("hash failed"),
+        WorldHash::new(V10_GOLDEN_HASH_AFTER_1000),
         "resumed evolution diverged from the recording"
     );
 }

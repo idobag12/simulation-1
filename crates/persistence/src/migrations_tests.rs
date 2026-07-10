@@ -18,6 +18,36 @@ fn chain_extensions(original: &[u8], extensions: &[&[&str]]) -> Vec<u8> {
     bytes
 }
 
+/// Asserts the migrated prefix passes through verbatim — except
+/// `econ.housing_book`, whose v10 growth is MECHANICAL: the old fields
+/// verbatim plus an empty per-district ask vector (ADR 0012 §4).
+fn assert_prefix_survives(migrated: &SaveBody, original: &[(String, Vec<u8>)]) {
+    for (index, (name, bytes)) in original.iter().enumerate() {
+        let (migrated_name, migrated_bytes) = &migrated.components[index];
+        assert_eq!(migrated_name, name);
+        if name == "econ.housing_book" {
+            let old: Vec<(u32, HousingBookV9)> = codec::from_bytes(bytes).unwrap();
+            let new: Vec<(u32, core_ecs::sim_interface::HousingBook)> =
+                codec::from_bytes(migrated_bytes).unwrap();
+            assert_eq!(old.len(), new.len());
+            for ((old_index, old_row), (new_index, new_row)) in old.iter().zip(new.iter()) {
+                assert_eq!(old_index, new_index);
+                assert_eq!(old_row.rent_ask_mills, new_row.rent_ask_mills);
+                assert_eq!(old_row.last_home_price_mills, new_row.last_home_price_mills);
+                assert!(
+                    new_row.district_rent_ask_mills.is_empty(),
+                    "migration must not invent district asks"
+                );
+            }
+        } else {
+            assert_eq!(
+                migrated_bytes, bytes,
+                "store `{name}` must survive verbatim"
+            );
+        }
+    }
+}
+
 /// Every component name the chain appends after a v2-era store list.
 fn all_appended() -> Vec<&'static str> {
     V3_ADDED_COMPONENTS
@@ -28,6 +58,7 @@ fn all_appended() -> Vec<&'static str> {
         .chain(V7_ADDED_COMPONENTS.iter())
         .chain(V8_ADDED_COMPONENTS.iter())
         .chain(V9_ADDED_COMPONENTS.iter())
+        .chain(V10_ADDED_COMPONENTS.iter())
         .copied()
         .collect()
 }
@@ -302,6 +333,7 @@ fn v3_fixture_content_survives_migration_verbatim() {
         .chain(V7_ADDED_COMPONENTS.iter())
         .chain(V8_ADDED_COMPONENTS.iter())
         .chain(V9_ADDED_COMPONENTS.iter())
+        .chain(V10_ADDED_COMPONENTS.iter())
         .copied()
         .collect();
     assert_eq!(
@@ -357,6 +389,7 @@ fn v4_fixture_content_survives_migration_verbatim() {
         .chain(V7_ADDED_COMPONENTS.iter())
         .chain(V8_ADDED_COMPONENTS.iter())
         .chain(V9_ADDED_COMPONENTS.iter())
+        .chain(V10_ADDED_COMPONENTS.iter())
         .copied()
         .collect();
     assert_eq!(
@@ -412,6 +445,7 @@ fn v5_fixture_content_survives_migration_verbatim() {
         .chain(V7_ADDED_COMPONENTS.iter())
         .chain(V8_ADDED_COMPONENTS.iter())
         .chain(V9_ADDED_COMPONENTS.iter())
+        .chain(V10_ADDED_COMPONENTS.iter())
         .copied()
         .collect();
     assert_eq!(
@@ -465,6 +499,7 @@ fn v6_fixture_content_survives_migration_verbatim() {
         .iter()
         .chain(V8_ADDED_COMPONENTS.iter())
         .chain(V9_ADDED_COMPONENTS.iter())
+        .chain(V10_ADDED_COMPONENTS.iter())
         .copied()
         .collect();
     assert_eq!(
@@ -505,18 +540,19 @@ fn v7_fixture_content_survives_migration_verbatim() {
     let migrated = migrate_to_current(7, raw).expect("migration");
     assert_eq!(migrated.seed, Seed::new(41));
     assert_eq!(migrated.tick, Ticks::new(29360));
-    assert_eq!(
-        &migrated.components[..original_components.len()],
-        &original_components
-    );
+    assert_prefix_survives(&migrated, &original_components);
     assert_eq!(
         migrated.components.len(),
-        original_components.len() + V8_ADDED_COMPONENTS.len() + V9_ADDED_COMPONENTS.len()
+        original_components.len()
+            + V8_ADDED_COMPONENTS.len()
+            + V9_ADDED_COMPONENTS.len()
+            + V10_ADDED_COMPONENTS.len()
     );
     for (name, bytes) in &migrated.components[original_components.len()..] {
         assert!(
             V8_ADDED_COMPONENTS.contains(&name.as_str())
                 || V9_ADDED_COMPONENTS.contains(&name.as_str())
+                || V10_ADDED_COMPONENTS.contains(&name.as_str())
         );
         assert_eq!(*bytes, empty_store());
     }
@@ -547,16 +583,16 @@ fn v8_fixture_content_survives_migration_verbatim() {
     let migrated = migrate_to_current(8, raw).expect("migration");
     assert_eq!(migrated.seed, Seed::new(43));
     assert_eq!(migrated.tick, Ticks::new(29360));
-    assert_eq!(
-        &migrated.components[..original_components.len()],
-        &original_components
-    );
+    assert_prefix_survives(&migrated, &original_components);
     assert_eq!(
         migrated.components.len(),
-        original_components.len() + V9_ADDED_COMPONENTS.len()
+        original_components.len() + V9_ADDED_COMPONENTS.len() + V10_ADDED_COMPONENTS.len()
     );
     for (name, bytes) in &migrated.components[original_components.len()..] {
-        assert!(V9_ADDED_COMPONENTS.contains(&name.as_str()));
+        assert!(
+            V9_ADDED_COMPONENTS.contains(&name.as_str())
+                || V10_ADDED_COMPONENTS.contains(&name.as_str())
+        );
         assert_eq!(*bytes, empty_store());
     }
     assert_eq!(
@@ -565,4 +601,47 @@ fn v8_fixture_content_survives_migration_verbatim() {
         "the events blob must differ by exactly the v9 registration extension"
     );
     assert_ne!(migrated.events, original_events);
+}
+
+/// ADR 0004 §10 content-continuity proof for the committed Phase 8
+/// fixture: v9→v10 appends exactly the (empty) siting store, passes
+/// every OTHER store through verbatim, mechanically grows the housing
+/// book's rows (checked row by row by `assert_prefix_survives`), and
+/// leaves the events blob byte-identical (v10 adds no events).
+#[test]
+fn v9_fixture_content_survives_migration_verbatim() {
+    const V9_FIXTURE: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/v9_seed47_fixture30_citizens2500_tick29360.embersave"
+    ));
+    let payload = &V9_FIXTURE[crate::MAGIC.len() + 4..];
+    let raw = zstd::stream::decode_all(payload).expect("fixture decompresses");
+    let v9: SaveBodyV9 = codec::from_bytes(&raw).expect("fixture decodes as v9");
+    let original_events = v9.events.clone();
+    let original_components = v9.components.clone();
+    // The proof must exercise the REWRITE: the fixture carries real
+    // housing rows.
+    let housing_rows: Vec<(u32, HousingBookV9)> = original_components
+        .iter()
+        .find(|(name, _)| name == "econ.housing_book")
+        .map(|(_, bytes)| codec::from_bytes(bytes).expect("housing rows decode"))
+        .expect("the v9 fixture has a housing book");
+    assert!(!housing_rows.is_empty());
+
+    let migrated = migrate_to_current(9, raw).expect("migration");
+    assert_eq!(migrated.seed, Seed::new(47));
+    assert_eq!(migrated.tick, Ticks::new(29360));
+    assert_prefix_survives(&migrated, &original_components);
+    assert_eq!(
+        migrated.components.len(),
+        original_components.len() + V10_ADDED_COMPONENTS.len()
+    );
+    for (name, bytes) in &migrated.components[original_components.len()..] {
+        assert!(V10_ADDED_COMPONENTS.contains(&name.as_str()));
+        assert_eq!(*bytes, empty_store());
+    }
+    assert_eq!(
+        migrated.events, original_events,
+        "v10 adds no events: the blob passes through byte-identical"
+    );
 }

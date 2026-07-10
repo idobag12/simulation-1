@@ -1,0 +1,23 @@
+// The town map (Phase 9, ADR 0012): districts and the symmetric
+// travel-time matrix in ticks — the matrix IS the path (no geometry
+// until the viewer wants pixels). `old_town` is the CENTER (short
+// travel everywhere); `outfields` is the EDGE (long travel) — rent and
+// revenue stratification emerges from this asymmetry alone.
+MapConfig(
+    districts: [
+        DistrictDef(id: "old_town"),
+        DistrictDef(id: "riverside"),
+        DistrictDef(id: "outfields"),
+    ],
+    // Door-to-door ticks; the DIAGONAL is the intra-district trip.
+    // The outfields are genuinely REMOTE — the map's whole point is a
+    // center that serves every errand cheaply and an edge that pays
+    // for each trip.
+    travel_ticks: [
+        [4,  12, 45],
+        [12,  6, 55],
+        [45, 55, 10],
+    ],
+    // What one commute tick costs a housing bidder, mills (ADR 0012 §3).
+    commute_mills_per_tick: 2,
+)

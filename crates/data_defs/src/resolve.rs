@@ -115,6 +115,8 @@ pub fn resolve_ai(defs: &DataDefs) -> sim_ai::AiTables {
                 .unwrap_or(0) as u32,
         },
         skill_count: defs.skills.skills.len() as u32,
+        district_travel: defs.map.travel_ticks.clone(),
+        commute_mills_per_tick: defs.map.commute_mills_per_tick,
         lod: sim_ai::config::LodTables {
             tier_a_cap: defs.lod.tier_a_cap,
             tier_b_cap: defs.lod.tier_b_cap,
@@ -252,6 +254,9 @@ pub fn resolve_economy(defs: &DataDefs) -> sim_economy::EconTables {
             .iter()
             .position(|skill| skill.id == defs.skills.public_skill_id)
             .unwrap_or(0) as u32,
+        district_travel: defs.map.travel_ticks.clone(),
+        commute_mills_per_tick: defs.map.commute_mills_per_tick,
+        flat_travel_ticks: defs.ai.travel_ticks,
         labor: sim_economy::config::LaborTables {
             shift_start_hour: defs.labor.shift_start_hour,
             shift_end_hour: defs.labor.shift_end_hour,

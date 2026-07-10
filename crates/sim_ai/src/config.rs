@@ -160,9 +160,33 @@ pub struct AiTables {
     pub skill_count: u32,
     /// The LOD tier tunables (Phase 8, ADR 0011).
     pub lod: LodTables,
+    /// `travel_ticks[from][to]` between districts (Phase 9, ADR 0012
+    /// §1; data order, validated square/symmetric). Empty when the
+    /// world predates the map.
+    pub district_travel: Vec<Vec<u32>>,
+    /// What one commute tick costs in mills (Phase 9, ADR 0012 §3):
+    /// the coarse tiers' money-equivalent of embodied travel
+    /// disutility — their shop choice weighs distance the same way.
+    pub commute_mills_per_tick: i64,
 }
 
 impl AiTables {
+    /// Travel ticks between two locations' districts (Phase 9,
+    /// ADR 0012 §2): the matrix when BOTH ends are sited, else the
+    /// flat data constant — exactly the pre-map behavior for un-sited
+    /// (migrated) locations.
+    pub fn travel_between(&self, from: Option<u32>, to: Option<u32>) -> u32 {
+        match (from, to) {
+            (Some(from), Some(to)) => self
+                .district_travel
+                .get(from as usize)
+                .and_then(|row| row.get(to as usize))
+                .copied()
+                .unwrap_or(self.travel_ticks),
+            _ => self.travel_ticks,
+        }
+    }
+
     /// The per-tick gain of `kind` for `need_index`, if that kind
     /// satisfies it.
     pub fn satisfier_rate(&self, kind: u32, need_index: u32) -> Option<i64> {
@@ -261,4 +285,25 @@ pub struct SocialTables {
     pub drift_need: u32,
     /// The romance-screen trait (data order index).
     pub spark_trait: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    /// ADR 0012 §2: the pair lookup uses the matrix only when BOTH ends
+    /// are sited; anything else falls back to the flat constant — the
+    /// migrated world's exact pre-map behavior.
+    #[test]
+    fn travel_between_falls_back_to_flat_for_unsited_ends() {
+        let mut tables = crate::systems_lod::tests::test_tables();
+        tables.travel_ticks = 15;
+        tables.district_travel = vec![vec![4, 12], vec![12, 6]];
+        assert_eq!(tables.travel_between(Some(0), Some(1)), 12);
+        assert_eq!(tables.travel_between(Some(1), Some(1)), 6);
+        assert_eq!(tables.travel_between(None, Some(1)), 15);
+        assert_eq!(tables.travel_between(Some(0), None), 15);
+        assert_eq!(tables.travel_between(None, None), 15);
+        // An out-of-range index (corrupt save) degrades to flat, never
+        // panics.
+        assert_eq!(tables.travel_between(Some(9), Some(0)), 15);
+    }
 }

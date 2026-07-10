@@ -92,6 +92,12 @@ const GOOD_FERTILITY: &str = r#"FertilityConfig(
         ],
         max_household_size: 6, trait_mutation_per_mille: 120,
     )"#;
+const GOOD_MAP: &str = r#"MapConfig(
+    districts: [DistrictDef(id: "old_town"), DistrictDef(id: "outfields")],
+    travel_ticks: [[4, 10], [10, 6]],
+    commute_mills_per_tick: 2,
+)"#;
+
 const GOOD_LOD: &str = r#"LodConfig(
         tier_a_cap: 200, tier_b_cap: 2000, highlight_days: 3,
         leisure_hours_per_day: 4, macro_tolerance_per_mille: 150,
@@ -157,6 +163,7 @@ pub(crate) fn write_tree(overrides: &[(&str, &str)]) -> PathBuf {
         ("balance/social.ron", GOOD_SOCIAL),
         ("balance/fertility.ron", GOOD_FERTILITY),
         ("balance/lod.ron", GOOD_LOD),
+        ("map.ron", GOOD_MAP),
     ];
     for (rel, content) in base {
         let path = root.join(rel);
@@ -282,5 +289,55 @@ fn lod_bounds_are_rejected_at_load_with_precise_messages() {
             assert!(message.contains("exceeds a full need"), "{message}");
         }
         other => panic!("expected Validation error, got {other:?}"),
+    }
+}
+
+/// Phase 9 (ADR 0012 §6): every map bound rejects at load with a
+/// precise message.
+#[test]
+fn map_bounds_are_rejected_at_load_with_precise_messages() {
+    for (content, needle) in [
+        (
+            r#"MapConfig(districts: [], travel_ticks: [], commute_mills_per_tick: 2)"#,
+            "at least one district",
+        ),
+        (
+            r#"MapConfig(districts: [DistrictDef(id: "a"), DistrictDef(id: "a")],
+                travel_ticks: [[4, 10], [10, 6]], commute_mills_per_tick: 2)"#,
+            "duplicate district id",
+        ),
+        (
+            r#"MapConfig(districts: [DistrictDef(id: "a"), DistrictDef(id: "b")],
+                travel_ticks: [[4, 10]], commute_mills_per_tick: 2)"#,
+            "must be 2x2",
+        ),
+        (
+            r#"MapConfig(districts: [DistrictDef(id: "a"), DistrictDef(id: "b")],
+                travel_ticks: [[4, 10], [11, 6]], commute_mills_per_tick: 2)"#,
+            "symmetric",
+        ),
+        (
+            r#"MapConfig(districts: [DistrictDef(id: "a"), DistrictDef(id: "b")],
+                travel_ticks: [[0, 10], [10, 6]], commute_mills_per_tick: 2)"#,
+            "no teleports",
+        ),
+        (
+            r#"MapConfig(districts: [DistrictDef(id: "a"), DistrictDef(id: "b")],
+                travel_ticks: [[4, 2000], [2000, 6]], commute_mills_per_tick: 2)"#,
+            "fit inside a day",
+        ),
+        (
+            r#"MapConfig(districts: [DistrictDef(id: "a"), DistrictDef(id: "b")],
+                travel_ticks: [[4, 10], [10, 6]], commute_mills_per_tick: -1)"#,
+            "commute_mills_per_tick",
+        ),
+    ] {
+        let root = write_tree(&[("map.ron", content)]);
+        match load(&root) {
+            Err(DataError::Validation { message, .. }) => {
+                assert!(message.contains(needle), "{message}");
+            }
+            other => panic!("expected Validation error for {needle}, got {other:?}"),
+        }
     }
 }

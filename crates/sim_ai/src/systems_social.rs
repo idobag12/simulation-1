@@ -335,6 +335,8 @@ mod tests {
                 spark_trait: 0,
             },
             skill_count: 1,
+            district_travel: Vec::new(),
+            commute_mills_per_tick: 0,
             lod: crate::config::LodTables {
                 tier_a_cap: 1000,
                 tier_b_cap: 1000,

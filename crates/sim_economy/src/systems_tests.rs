@@ -24,6 +24,9 @@ pub(crate) fn ctx() -> TickContext {
 /// 2h; 1: 4 grain → 12 flour in 2h).
 pub(crate) fn tables() -> EconTables {
     EconTables {
+        district_travel: Vec::new(),
+        commute_mills_per_tick: 0,
+        flat_travel_ticks: 1,
         goods: 2,
         spoil_per_mille: vec![0, 0],
         recipes: vec![
@@ -143,6 +146,9 @@ pub(crate) fn world_with_firms(tables: &EconTables) -> World {
     world.register::<FirmBooks>().expect("register");
     world.register::<EconCounters>().expect("register");
     world.register::<Production>().expect("register");
+    world
+        .register::<core_ecs::sim_interface::Sited>()
+        .expect("register");
     world
         .register::<core_ecs::sim_interface::Location>()
         .expect("register");

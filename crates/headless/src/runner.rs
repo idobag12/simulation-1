@@ -168,6 +168,8 @@ pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register_event::<core_ecs::sim_interface::Born>()?;
     world.register_event::<core_ecs::sim_interface::SchoolAttended>()?;
     world.register_event::<core_ecs::sim_interface::TierChanged>()?;
+    // v10 (Phase 9, ADR 0012 §4): the map siting component.
+    world.register::<core_ecs::sim_interface::Sited>()?;
     Ok(())
 }
 
@@ -440,6 +442,9 @@ pub fn build_simulation(
         // firms (kind × instance order), then issuance recorded from
         // EVERY wallet seeded above — the identities hold from tick 0.
         sim_economy::genesis::populate(&mut world, &data_defs::resolve_economy(defs))?;
+        // The map (Phase 9, ADR 0012 §1): site every location — AFTER
+        // every genesis pass that creates one (homes, venues, firms).
+        sim_world::genesis::site_locations(&mut world, defs.map.districts.len() as u32)?;
     }
     Ok((Simulation::new(world, calendar), build_schedule(spec, defs)))
 }

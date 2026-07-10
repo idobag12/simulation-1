@@ -494,8 +494,10 @@ fn ten_thousand_citizens_hit_the_tick_budget() {
     let elapsed = start.elapsed();
     let ticks_per_sec = span as f64 / elapsed.as_secs_f64();
     assert!(
-        ticks_per_sec >= 200.0,
-        "SPEC §10 budget: {ticks_per_sec:.0} ticks/sec < 200 at 10k citizens"
+        ticks_per_sec >= 300.0,
+        "the Phase 9 HEADROOM floor (ADR 0012 §5; the SPEC §10 budget \
+         is 200): {ticks_per_sec:.0} ticks/sec < 300 at 10k citizens \
+         with the map wired"
     );
 }
 
@@ -512,8 +514,9 @@ fn a_week_of_catchup_fits_the_five_second_budget() {
     runner::catch_up(&mut sim, &defs, 7).expect("catch up");
     let elapsed = start.elapsed();
     assert!(
-        elapsed.as_secs_f64() < 5.0,
-        "SPEC §5 budget: a simulated week took {elapsed:?} (>= 5s) at 10k citizens"
+        elapsed.as_secs_f64() < 2.5,
+        "the Phase 9 HEADROOM floor (ADR 0012 §5; the SPEC §15 budget \
+         is 5 s): a simulated week took {elapsed:?} at 10k citizens"
     );
     assert!(debug_tools::audit_economy(sim.world()).expect("audit"));
 }

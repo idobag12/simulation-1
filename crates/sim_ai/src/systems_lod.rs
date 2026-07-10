@@ -336,7 +336,7 @@ pub fn demote_all_to_c(world: &mut World, tables: &AiTables) -> Result<(), EcsEr
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use core_ecs::sim_interface::NeedLevel;
     use core_types::{CalendarTime, Seed, Ticks};
@@ -389,6 +389,8 @@ mod tests {
                 spark_trait: 0,
             },
             skill_count: 1,
+            district_travel: Vec::new(),
+            commute_mills_per_tick: 0,
             lod: crate::config::LodTables {
                 tier_a_cap: 2,
                 tier_b_cap: 1,

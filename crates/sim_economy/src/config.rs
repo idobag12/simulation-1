@@ -250,4 +250,28 @@ pub struct EconTables {
     pub doing_gain_per_shift_per_mille: u16,
     /// Total skills in data order (lazy `Skills` rows take this shape).
     pub skill_count: u32,
+    /// `travel_ticks[from][to]` between districts (Phase 9, ADR 0012
+    /// §3). Empty when the world predates the map.
+    pub district_travel: Vec<Vec<u32>>,
+    /// What one commute tick costs a housing bidder, mills.
+    pub commute_mills_per_tick: i64,
+    /// The flat travel fallback for un-sited locations (the pre-map
+    /// behavior; from `ai.ron`).
+    pub flat_travel_ticks: u32,
+}
+
+impl EconTables {
+    /// Travel ticks between two locations' districts (Phase 9): the
+    /// matrix when both ends are sited, else the flat fallback.
+    pub fn travel_between(&self, from: Option<u32>, to: Option<u32>) -> u32 {
+        match (from, to) {
+            (Some(from), Some(to)) => self
+                .district_travel
+                .get(from as usize)
+                .and_then(|row| row.get(to as usize))
+                .copied()
+                .unwrap_or(self.flat_travel_ticks),
+            _ => self.flat_travel_ticks,
+        }
+    }
 }

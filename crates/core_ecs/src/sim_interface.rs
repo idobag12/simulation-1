@@ -133,6 +133,22 @@ pub struct Location {
     pub kind: u32,
 }
 
+/// A location's district on the town map (Phase 9, ADR 0012 §1): a
+/// persisted index into the data-order district list (the list only
+/// grows at the end). Pre-v10 locations have no row — travel falls
+/// back to the flat data constant, exactly the pre-map behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Sited {
+    /// District index, data order.
+    pub district: u32,
+}
+
+impl Component for Sited {
+    const NAME: &'static str = "world.sited";
+    // Sparse: location entities only.
+    const STORAGE: StorageKind = StorageKind::Sparse;
+}
+
 impl Component for Location {
     const NAME: &'static str = "world.location";
     // Sparse: locations are a small minority of entities.

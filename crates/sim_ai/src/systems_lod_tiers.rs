@@ -29,11 +29,21 @@ fn offer_snapshot(world: &World) -> Result<Vec<(Entity, RetailOffer)>, EcsError>
 /// uses; ADR 0011 §2). Ties break on entity order.
 fn cheapest_for_need(
     world: &World,
+    tables: &AiTables,
     buyer: Entity,
     need: u32,
     offers: &[(Entity, RetailOffer)],
 ) -> Result<Option<(Entity, RetailOffer)>, EcsError> {
     let beliefs = world.get::<Beliefs>(buyer)?;
+    // The buyer's district (their current abstract position): coarse
+    // shop choice weighs distance like embodied scoring does, at the
+    // data money-equivalent (Phase 9, ADR 0012 §3).
+    let from = match world.get::<Position>(buyer)?.map(|position| position.at) {
+        Some(at) => world
+            .get::<core_ecs::sim_interface::Sited>(at)?
+            .map(|sited| sited.district),
+        None => None,
+    };
     let mut best: Option<(i64, Entity, RetailOffer)> = None;
     for (seller, offer) in offers {
         if offer.need_index != need || offer.gain_per_unit <= 0 {
@@ -48,8 +58,13 @@ fn cheapest_for_need(
                     .map(|(_, price)| price.mills())
             })
             .unwrap_or(offer.unit_price.mills());
-        if best.is_none_or(|(price, _, _)| believed < price) {
-            best = Some((believed, *seller, *offer));
+        let to = world
+            .get::<core_ecs::sim_interface::Sited>(*seller)?
+            .map(|sited| sited.district);
+        let effective =
+            believed + tables.commute_mills_per_tick * i64::from(tables.travel_between(from, to));
+        if best.is_none_or(|(price, _, _)| effective < price) {
+            best = Some((effective, *seller, *offer));
         }
     }
     Ok(best.map(|(_, seller, offer)| (seller, offer)))
@@ -248,7 +263,7 @@ impl System for TierBSystem {
                 .map(|(candidate, _)| candidate as u32);
             if let Some(purchase_need) = purchase_need
                 && let Some((seller, offer)) =
-                    cheapest_for_need(world, citizen, purchase_need, &offers)?
+                    cheapest_for_need(world, &self.tables, citizen, purchase_need, &offers)?
                 // Round-to-nearest coverage, like the embodied buyer
                 // (whose clamped gain happily wastes the tail of a
                 // unit): buy when at least half the unit lands.
@@ -286,8 +301,24 @@ impl System for TierBSystem {
             if let Some(kind) = best_kind
                 && let Some(venue) = venue_of_kind.get(kind as usize).copied().flatten()
             {
+                // The hour includes GETTING there (Phase 9): the trip's
+                // ticks come off the block, exactly the minutes an
+                // embodied citizen loses to the same walk.
+                let from = match world.get::<Position>(citizen)?.map(|position| position.at) {
+                    Some(at) => world
+                        .get::<core_ecs::sim_interface::Sited>(at)?
+                        .map(|sited| sited.district),
+                    None => None,
+                };
+                let to = world
+                    .get::<core_ecs::sim_interface::Sited>(venue)?
+                    .map(|sited| sited.district);
+                let trip =
+                    i64::from(self.tables.travel_between(from, to)).min(MINUTES_PER_HOUR as i64);
                 world.insert(citizen, Position { at: venue })?;
-                apply_kind_gains(world, citizen, &self.tables, kind, hour_gain)?;
+                apply_kind_gains(world, citizen, &self.tables, kind, |rate| {
+                    rate * (MINUTES_PER_HOUR as i64 - trip)
+                })?;
             } else {
                 park_at_home(world, citizen)?;
             }
@@ -403,7 +434,8 @@ impl System for TierCSystem {
                         .map(|level| level.raw())
                         .unwrap_or(core_ecs::sim_interface::NeedLevel::MAX.raw());
                     let deficit = core_ecs::sim_interface::NeedLevel::MAX.raw() - level;
-                    let Some((seller, offer)) = cheapest_for_need(world, citizen, need, &offers)?
+                    let Some((seller, offer)) =
+                        cheapest_for_need(world, &self.tables, citizen, need, &offers)?
                     else {
                         break;
                     };
@@ -474,6 +506,9 @@ mod tests {
         world.register::<Skills>().expect("register");
         world
             .register::<core_ecs::sim_interface::TreasuryBook>()
+            .expect("register");
+        world
+            .register::<core_ecs::sim_interface::Sited>()
             .expect("register");
         world.register_event::<GoodsPurchased>().expect("register");
 

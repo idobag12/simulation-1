@@ -103,6 +103,42 @@ impl System for ProductionSystem {
                                         kind: self.tables.money.home_location_kind,
                                     },
                                 )?;
+                                // Site the new home in the district
+                                // with the fewest homes (ADR 0012 §1:
+                                // deterministic supply spreading; tie →
+                                // lowest index). Un-mapped worlds
+                                // (empty matrix) site nothing.
+                                let districts = self.tables.district_travel.len() as u32;
+                                if districts > 0 {
+                                    let mut counts = vec![0u32; districts as usize];
+                                    for (other, _) in
+                                        world.iter::<core_ecs::sim_interface::Location>()?
+                                    {
+                                        if let Some(sited) =
+                                            world.get::<core_ecs::sim_interface::Sited>(other)?
+                                            && let Some(slot) =
+                                                counts.get_mut(sited.district as usize)
+                                            && world
+                                                .get::<core_ecs::sim_interface::Location>(other)?
+                                                .is_some_and(|location| {
+                                                    location.kind
+                                                        == self.tables.money.home_location_kind
+                                                })
+                                        {
+                                            *slot += 1;
+                                        }
+                                    }
+                                    let district = counts
+                                        .iter()
+                                        .enumerate()
+                                        .min_by_key(|(index, count)| (**count, *index))
+                                        .map(|(index, _)| index as u32)
+                                        .unwrap_or(0);
+                                    world.insert(
+                                        home,
+                                        core_ecs::sim_interface::Sited { district },
+                                    )?;
+                                }
                                 world.insert(
                                     home,
                                     core_ecs::sim_interface::Ownership { owner: entity },

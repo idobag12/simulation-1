@@ -256,6 +256,56 @@ fn v7_to_v8(mut v7: SaveBodyV7) -> Result<SaveBodyV8, PersistError> {
 /// appends registrations — so the alias documents the version boundary.
 type SaveBodyV8 = SaveBody;
 
+/// Format v9 body, FROZEN. Structurally identical to v10 — v9→v10 only
+/// appends a registration — so the alias documents the version boundary.
+type SaveBodyV9 = SaveBody;
+
+// Registration growth from v9 to v10 (Phase 9, ADR 0012 §4). A
+// historical fact of the format, frozen here forever.
+const V10_ADDED_COMPONENTS: [&str; 1] = ["world.sited"];
+
+/// The v9 `econ.housing_book` row shape, FROZEN (the v10 struct grew
+/// `district_rent_ask_mills`).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct HousingBookV9 {
+    rent_ask_mills: i64,
+    last_home_price_mills: i64,
+}
+
+/// Pure step v9 → v10 (ADR 0012 §4): the registration grew by the map
+/// siting component (appended; a v9 world carried no districts, so the
+/// store is empty and every migrated travel lookup falls back to the
+/// flat data constant — the pre-map behavior), and `HousingBook` grew
+/// its per-district ask vector — migrated rows carry an EMPTY vector
+/// (the global ask keeps steering an un-mapped world's rents); nothing
+/// is invented.
+fn v9_to_v10(mut v9: SaveBodyV9) -> Result<SaveBody, PersistError> {
+    let empty_store = codec::to_bytes(&Vec::<(u32, u8)>::new())?;
+    for name in V10_ADDED_COMPONENTS {
+        v9.components.push((name.to_owned(), empty_store.clone()));
+    }
+    for (name, bytes) in &mut v9.components {
+        if name == "econ.housing_book" {
+            let rows: Vec<(u32, HousingBookV9)> = codec::from_bytes(bytes)?;
+            let grown: Vec<(u32, core_ecs::sim_interface::HousingBook)> = rows
+                .into_iter()
+                .map(|(index, row)| {
+                    (
+                        index,
+                        core_ecs::sim_interface::HousingBook {
+                            rent_ask_mills: row.rent_ask_mills,
+                            last_home_price_mills: row.last_home_price_mills,
+                            district_rent_ask_mills: Vec::new(),
+                        },
+                    )
+                })
+                .collect();
+            *bytes = codec::to_bytes(&grown)?;
+        }
+    }
+    Ok(v9)
+}
+
 // Registration growth from v8 to v9 (Phase 8, ADR 0011 §6). Historical
 // facts of the format, frozen here forever.
 const V9_ADDED_COMPONENTS: [&str; 3] = ["lod.tier", "lod.day_model", "lod.spotlight"];
@@ -284,39 +334,45 @@ pub(crate) fn migrate_to_current(version: u32, raw: Vec<u8>) -> Result<SaveBody,
     match version {
         1 => {
             let v1: SaveBodyV1 = codec::from_bytes(&raw)?;
-            v8_to_v9(v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v3_to_v4(
-                v2_to_v3(v1_to_v2(v1))?,
+            v9_to_v10(v8_to_v9(v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(
+                v3_to_v4(v2_to_v3(v1_to_v2(v1))?)?,
             )?)?)?)?)?)
         }
         2 => {
             let v2: SaveBodyV2 = codec::from_bytes(&raw)?;
-            v8_to_v9(v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v3_to_v4(
-                v2_to_v3(v2)?,
+            v9_to_v10(v8_to_v9(v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(
+                v3_to_v4(v2_to_v3(v2)?)?,
             )?)?)?)?)?)
         }
         3 => {
             let v3: SaveBodyV3 = codec::from_bytes(&raw)?;
-            v8_to_v9(v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v3_to_v4(v3)?)?)?)?)?)
+            v9_to_v10(v8_to_v9(v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(
+                v3_to_v4(v3)?,
+            )?)?)?)?)?)
         }
         4 => {
             let v4: SaveBodyV4 = codec::from_bytes(&raw)?;
-            v8_to_v9(v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v4)?)?)?)?)
+            v9_to_v10(v8_to_v9(v7_to_v8(v6_to_v7(v5_to_v6(v4_to_v5(v4)?)?)?)?)?)
         }
         5 => {
             let v5: SaveBodyV5 = codec::from_bytes(&raw)?;
-            v8_to_v9(v7_to_v8(v6_to_v7(v5_to_v6(v5)?)?)?)
+            v9_to_v10(v8_to_v9(v7_to_v8(v6_to_v7(v5_to_v6(v5)?)?)?)?)
         }
         6 => {
             let v6: SaveBodyV6 = codec::from_bytes(&raw)?;
-            v8_to_v9(v7_to_v8(v6_to_v7(v6)?)?)
+            v9_to_v10(v8_to_v9(v7_to_v8(v6_to_v7(v6)?)?)?)
         }
         7 => {
             let v7: SaveBodyV7 = codec::from_bytes(&raw)?;
-            v8_to_v9(v7_to_v8(v7)?)
+            v9_to_v10(v8_to_v9(v7_to_v8(v7)?)?)
         }
         8 => {
             let v8: SaveBodyV8 = codec::from_bytes(&raw)?;
-            v8_to_v9(v8)
+            v9_to_v10(v8_to_v9(v8)?)
+        }
+        9 => {
+            let v9: SaveBodyV9 = codec::from_bytes(&raw)?;
+            v9_to_v10(v9)
         }
         FORMAT_VERSION => Ok(codec::from_bytes(&raw)?),
         other => Err(PersistError::UnsupportedVersion(other)),

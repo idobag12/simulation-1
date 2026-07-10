@@ -9,3 +9,6 @@ publish.workspace = true
 [dependencies]
 core_ecs = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+core_types = { path = "../core_types" }

@@ -79,8 +79,9 @@ impl System for PurchaseMarketSystem {
         let occupied = occupied_homes(world)?;
         let ask = home_price_anchor(world, housing.home_price_mills)?;
 
-        // Offers: vacant homes with a live owner, home entity order.
-        let offers: Vec<(Entity, Entity)> = {
+        // Offers: vacant homes with a live owner, home entity order,
+        // with districts (Phase 9 — buyers weigh the commute).
+        let mut offers: Vec<(Entity, Entity, Option<u32>, bool)> = {
             let mut list = Vec::new();
             for (home, ownership) in world.iter::<Ownership>()? {
                 if occupied.contains(&home.index()) {
@@ -90,8 +91,13 @@ impl System for PurchaseMarketSystem {
                     .get::<Location>(home)?
                     .is_some_and(|location| location.kind == home_kind);
                 if is_home && world.is_alive(ownership.owner) {
-                    list.push((home, ownership.owner));
+                    list.push((home, ownership.owner, None, false));
                 }
+            }
+            for entry in &mut list {
+                entry.2 = world
+                    .get::<core_ecs::sim_interface::Sited>(entry.0)?
+                    .map(|sited| sited.district);
             }
             list
         };
@@ -124,10 +130,39 @@ impl System for PurchaseMarketSystem {
         bids.sort_by_key(|(citizen, bid)| (Reverse(*bid), citizen.index()));
 
         let mut sale_prices: Vec<i64> = Vec::new();
-        for ((buyer, bid), (home, seller)) in bids.iter().zip(&offers) {
+        for (buyer, bid) in bids.iter() {
             if *bid < ask {
                 break;
             }
+            // The buyer takes the untaken home with the SHORTEST
+            // commute to their workplace (ADR 0012 §3; jobless buyers
+            // take entity order) — assortative, like the rental match.
+            let work_district = match world
+                .get::<core_ecs::sim_interface::Employment>(*buyer)?
+                .map(|employment| employment.employer)
+            {
+                Some(employer) => world
+                    .get::<core_ecs::sim_interface::Sited>(employer)?
+                    .map(|sited| sited.district),
+                None => None,
+            };
+            let Some(choice) = offers
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, _, _, taken))| !taken)
+                .min_by_key(|(_, (home, _, district, _))| {
+                    let commute = match work_district {
+                        Some(_) => i64::from(self.tables.travel_between(*district, work_district)),
+                        None => 0,
+                    };
+                    (commute, home.index())
+                })
+                .map(|(index, _)| index)
+            else {
+                break; // no vacancy left
+            };
+            let (home, seller) = (&offers[choice].0.clone(), &offers[choice].1.clone());
+            offers[choice].3 = true;
             let price = add(ask, *bid, "home midpoint")? / 2;
 
             // Financing, cash-first (ADR 0009 §3): savings cover what
