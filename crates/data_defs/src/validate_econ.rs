@@ -25,12 +25,19 @@ pub(crate) fn validate_economy(
     people: &sim_people::config::PeopleConfig,
     locations: &sim_world::config::LocationsConfig,
     public_location_kind_id: &str,
+    school_location_kind_id: &str,
 ) -> Result<(), DataError> {
     validate_goods(data_root, goods)?;
     validate_recipes(data_root, goods, recipes)?;
     validate_firms(data_root, goods, recipes, firms, people, locations)?;
     validate_market(data_root, economy)?;
-    validate_location_liveness(data_root, firms, locations, public_location_kind_id)
+    validate_location_liveness(
+        data_root,
+        firms,
+        locations,
+        public_location_kind_id,
+        school_location_kind_id,
+    )
 }
 
 fn validate_goods(
@@ -396,6 +403,7 @@ fn validate_location_liveness(
     firms: &sim_economy::config::FirmsConfig,
     locations: &sim_world::config::LocationsConfig,
     public_location_kind_id: &str,
+    school_location_kind_id: &str,
 ) -> Result<(), DataError> {
     let file = "locations.ron";
     for kind in &locations.kinds {
@@ -403,7 +411,8 @@ fn validate_location_liveness(
             .kinds
             .iter()
             .any(|firm| firm.location_kind_id == kind.id)
-            || kind.id == public_location_kind_id;
+            || kind.id == public_location_kind_id
+            || kind.id == school_location_kind_id;
         if claimed {
             continue;
         }

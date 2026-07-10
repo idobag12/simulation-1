@@ -1,0 +1,13 @@
+// Reproduction (ADR 0010 par.4): age-banded daily chances (per billion,
+// drawn on people.fertility), gated on marriage + shared residence,
+// capped by household size. Trait inheritance mutates around the
+// parents' midpoint.
+FertilityConfig(
+    bands: [
+        FertilityBand(min_age_years: 16, max_age_years: 24, per_day_chance_per_billion: 9000000),
+        FertilityBand(min_age_years: 25, max_age_years: 34, per_day_chance_per_billion: 7000000),
+        FertilityBand(min_age_years: 35, max_age_years: 44, per_day_chance_per_billion: 2500000),
+    ],
+    max_household_size: 6,
+    trait_mutation_per_mille: 120,
+)

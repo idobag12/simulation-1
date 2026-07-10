@@ -101,6 +101,12 @@ pub struct DataDefs {
     pub housing: sim_economy::HousingConfig,
     /// Taxes and the public employer (Phase 6, ADR 0009 §7).
     pub taxes: sim_economy::TaxesConfig,
+    /// Skills and the education pipeline (Phase 7, ADR 0010 §1).
+    pub skills: sim_people::config::SkillsConfig,
+    /// The social graph, gossip, and marriage (Phase 7, ADR 0010 §§2–4).
+    pub social: sim_ai::config::SocialConfig,
+    /// Reproduction (Phase 7, ADR 0010 §4).
+    pub fertility: sim_people::config::FertilityConfig,
 }
 
 /// Loads and validates every data definition from a `data/` directory
@@ -129,6 +135,10 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
     let bank: sim_economy::BankConfig = load_ron(&data_root.join("balance/bank.ron"))?;
     let housing: sim_economy::HousingConfig = load_ron(&data_root.join("balance/housing.ron"))?;
     let taxes: sim_economy::TaxesConfig = load_ron(&data_root.join("balance/taxes.ron"))?;
+    let skills: sim_people::config::SkillsConfig = load_ron(&data_root.join("skills.ron"))?;
+    let social: sim_ai::config::SocialConfig = load_ron(&data_root.join("balance/social.ron"))?;
+    let fertility: sim_people::config::FertilityConfig =
+        load_ron(&data_root.join("balance/fertility.ron"))?;
     validate(data_root, &calendar, &engine)?;
     validate_people(data_root, &calendar, &people)?;
     validate_locations(data_root, &locations, &people)?;
@@ -142,9 +152,20 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
         &people,
         &locations,
         &taxes.public_location_kind_id,
+        &skills.school.location_kind_id,
     )?;
     validate_labor(data_root, &labor, &people)?;
     validate_money(data_root, &bank, &housing, &taxes, &locations)?;
+    validate_social(
+        data_root,
+        &skills,
+        &social,
+        &fertility,
+        &recipes,
+        &people,
+        &locations,
+        labor.min_working_age_years,
+    )?;
     Ok(DataDefs {
         calendar,
         engine,
@@ -159,6 +180,9 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
         bank,
         housing,
         taxes,
+        skills,
+        social,
+        fertility,
     })
 }
 
@@ -180,7 +204,7 @@ mod validate_money;
 pub use resolve::{resolve_ai, resolve_economy};
 use validate::{validate, validate_ai, validate_locations, validate_people};
 use validate_econ::validate_economy;
-use validate_money::{validate_labor, validate_money};
+use validate_money::{validate_labor, validate_money, validate_social};
 
 #[cfg(test)]
 #[path = "tests.rs"]

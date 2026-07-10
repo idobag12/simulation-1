@@ -139,6 +139,25 @@ pub struct AiTables {
     /// Sales tax split out of every retail purchase, per-mille
     /// (Phase 6, from `data/balance/taxes.ron`).
     pub sales_tax_per_mille: i64,
+    /// School window start, minutes of day (Phase 7, from
+    /// `data/skills.ron` via `data_defs::resolve_ai`).
+    pub school_start_minute: u16,
+    /// School window end, minutes of day.
+    pub school_end_minute: u16,
+    /// Score bias for the AttendSchool candidate inside the window.
+    pub school_bias_micro: i64,
+    /// One attendance stint, ticks.
+    pub school_attend_ticks: u32,
+    /// The school's location kind (data order).
+    pub school_location_kind: u32,
+    /// The skill (data order) attendance raises.
+    pub school_taught_skill: u32,
+    /// Per-mille mastery per completed attendance.
+    pub school_gain_per_mille: u16,
+    /// The social graph's tunables (Phase 7, ADR 0010 §§2–3).
+    pub social: SocialConfig,
+    /// Total skills in data order (the `Skills.levels` length).
+    pub skill_count: u32,
 }
 
 impl AiTables {
@@ -151,4 +170,28 @@ impl AiTables {
             .find(|(need, _)| *need == need_index)
             .map(|(_, rate)| *rate)
     }
+}
+
+/// `data/balance/social.ron` (Phase 7, ADR 0010 §§2–3): the relationship
+/// graph's drifts and caps, the marriage threshold, and gossip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SocialConfig {
+    /// Bounded edges per citizen; the weakest non-kin edge evicts.
+    pub edge_cap: u32,
+    /// Friend-edge growth per shared leisure meeting, per-mille.
+    pub friend_drift_per_meeting_per_mille: i32,
+    /// Romance-edge growth per meeting (both single adults), per-mille.
+    pub romance_drift_per_meeting_per_mille: i32,
+    /// Non-kin edges decay this much per day; zero edges drop.
+    pub decay_per_day_per_mille: i32,
+    /// Romance sparks only when `soc_a × soc_b / 1000` clears this.
+    pub romance_min_sociability_product_per_mille: i32,
+    /// A romance edge at or above this marries (read by `sim_people`).
+    pub marriage_threshold_per_mille: i32,
+    /// Social-need gain multiplier per present friend:
+    /// `1 + weight/1000 × strength/1000`.
+    pub social_bond_weight_per_mille: i64,
+    /// Bounded believed-price rows per citizen.
+    pub belief_cap: u32,
 }

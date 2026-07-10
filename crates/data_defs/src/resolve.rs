@@ -71,6 +71,25 @@ pub fn resolve_ai(defs: &DataDefs) -> sim_ai::AiTables {
         work_need: need_index(&defs.labor.work_need_id),
         work_need_per_tick: defs.labor.work_need_per_tick,
         sales_tax_per_mille: defs.taxes.sales_per_mille,
+        school_start_minute: u16::from(defs.skills.school.start_hour) * 60,
+        school_end_minute: u16::from(defs.skills.school.end_hour) * 60,
+        school_bias_micro: defs.skills.school.attend_bias_micro,
+        school_attend_ticks: defs.skills.school.attend_ticks,
+        school_location_kind: defs
+            .locations
+            .kinds
+            .iter()
+            .position(|kind| kind.id == defs.skills.school.location_kind_id)
+            .unwrap_or(0) as u32, // validation guarantees a hit
+        school_taught_skill: defs
+            .skills
+            .skills
+            .iter()
+            .position(|skill| skill.id == defs.skills.school.taught_skill_id)
+            .unwrap_or(0) as u32,
+        school_gain_per_mille: defs.skills.school.gain_per_attendance_per_mille,
+        social: defs.social,
+        skill_count: defs.skills.skills.len() as u32,
     }
 }
 
@@ -140,6 +159,13 @@ pub fn resolve_economy(defs: &DataDefs) -> sim_economy::EconTables {
                     .map(|output| (good_index(&output.good_id), output.quantity)),
                 batch_hours: recipe.batch_hours,
                 builds_home: recipe.builds_home,
+                skill: recipe.skill_id.as_ref().map(|id| {
+                    defs.skills
+                        .skills
+                        .iter()
+                        .position(|skill| skill.id == *id)
+                        .unwrap_or(0) as u32 // validation guarantees a hit
+                }),
             })
             .collect(),
         firm_kinds: defs
@@ -186,6 +212,13 @@ pub fn resolve_economy(defs: &DataDefs) -> sim_economy::EconTables {
             public_location_kind: location_kind_index(&defs.taxes.public_location_kind_id),
             home_location_kind: defs.locations.home_kind().unwrap_or(0),
         },
+        labor_skill_weight_per_mille: defs.skills.labor_skill_weight_per_mille,
+        public_skill: defs
+            .skills
+            .skills
+            .iter()
+            .position(|skill| skill.id == defs.skills.public_skill_id)
+            .unwrap_or(0) as u32,
         labor: sim_economy::config::LaborTables {
             shift_start_hour: defs.labor.shift_start_hour,
             shift_end_hour: defs.labor.shift_end_hour,

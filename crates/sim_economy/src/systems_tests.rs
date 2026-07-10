@@ -31,12 +31,14 @@ pub(crate) fn tables() -> EconTables {
                 inputs: vec![],
                 output: Some((0, 10)),
                 builds_home: false,
+                skill: None,
                 batch_hours: 2,
             },
             RecipeTable {
                 inputs: vec![(0, 4)],
                 output: Some((1, 12)),
                 builds_home: false,
+                skill: None,
                 batch_hours: 2,
             },
         ],
@@ -125,6 +127,8 @@ pub(crate) fn tables() -> EconTables {
             public_location_kind: 0,
             home_location_kind: 0,
         },
+        labor_skill_weight_per_mille: 0,
+        public_skill: 0,
     }
 }
 

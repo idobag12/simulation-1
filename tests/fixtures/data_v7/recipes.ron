@@ -2,18 +2,18 @@
 // inputs) are the explicit modeled goods sources. Firms run one batch at
 // a time; outputs land batch_hours after inputs are consumed.
 RecipesConfig(recipes: [
-    RecipeDef(id: "harvest_grain",  inputs: [], output: Some(GoodQty(good_id: "grain",  quantity: 10)), batch_hours: 2),
-    RecipeDef(id: "draw_water",     inputs: [], output: Some(GoodQty(good_id: "water",  quantity: 12)), batch_hours: 2),
-    RecipeDef(id: "fell_timber",    inputs: [], output: Some(GoodQty(good_id: "timber", quantity: 6)),  batch_hours: 2),
-    RecipeDef(id: "mill_flour",     inputs: [GoodQty(good_id: "grain", quantity: 4)],
+    RecipeDef(id: "harvest_grain", skill_id: Some("craft"),   inputs: [], output: Some(GoodQty(good_id: "grain",  quantity: 10)), batch_hours: 2),
+    RecipeDef(id: "draw_water", skill_id: Some("craft"),      inputs: [], output: Some(GoodQty(good_id: "water",  quantity: 12)), batch_hours: 2),
+    RecipeDef(id: "fell_timber", skill_id: Some("craft"),     inputs: [], output: Some(GoodQty(good_id: "timber", quantity: 6)),  batch_hours: 2),
+    RecipeDef(id: "mill_flour", skill_id: Some("craft"),      inputs: [GoodQty(good_id: "grain", quantity: 4)],
               output: Some(GoodQty(good_id: "flour", quantity: 12)), batch_hours: 2),
-    RecipeDef(id: "bake_bread",     inputs: [GoodQty(good_id: "flour", quantity: 4), GoodQty(good_id: "water", quantity: 4)],
+    RecipeDef(id: "bake_bread", skill_id: Some("craft"),      inputs: [GoodQty(good_id: "flour", quantity: 4), GoodQty(good_id: "water", quantity: 4)],
               output: Some(GoodQty(good_id: "bread", quantity: 40)), batch_hours: 2),
-    RecipeDef(id: "split_firewood", inputs: [GoodQty(good_id: "timber", quantity: 2)],
+    RecipeDef(id: "split_firewood", skill_id: Some("craft"),  inputs: [GoodQty(good_id: "timber", quantity: 2)],
               output: Some(GoodQty(good_id: "firewood", quantity: 20)), batch_hours: 2),
     // Construction (Phase 6, ADR 0009 §5): the output is a HOME entity,
     // not goods — started only when the sale price covers materials and
     // financing (the policy rate's real-economy lever).
-    RecipeDef(id: "build_home", inputs: [GoodQty(good_id: "timber", quantity: 30)],
+    RecipeDef(id: "build_home", skill_id: Some("craft"),  inputs: [GoodQty(good_id: "timber", quantity: 30)],
               output: None, batch_hours: 48, builds_home: true),
 ])

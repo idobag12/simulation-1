@@ -22,6 +22,11 @@ pub use money::{
     BankBook, BorrowerStatus, HomeBuilt, HomeSold, HousingBook, Loan, LoanDefaulted, LoanGranted,
     Ownership, TaxCollected, TaxKind, Tenancy, TenancyStarted, TreasuryBook,
 };
+#[path = "sim_interface_social.rs"]
+mod social;
+pub use social::{
+    Beliefs, Born, Edge, Married, RelKind, Relationships, SchoolAge, SchoolAttended, Skills,
+};
 
 /// One need level in per-million units (ADR 0005 §2): 0 = fully depleted,
 /// [`NeedLevel::MAX`] = fully satisfied.

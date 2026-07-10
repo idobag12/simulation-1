@@ -196,3 +196,89 @@ mod tests {
         assert_eq!(config.per_day_chance(200), 1000);
     }
 }
+
+/// One skill definition (Phase 7, ADR 0010 §1).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillDef {
+    /// Stable identifier, e.g. `"letters"`.
+    pub id: String,
+}
+
+/// The school's tunables (`data/skills.ron`, ADR 0010 §1).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchoolDef {
+    /// The skill attendance raises (from the skills list).
+    pub taught_skill_id: String,
+    /// Per-mille mastery gained per completed attendance.
+    pub gain_per_attendance_per_mille: u16,
+    /// School age begins (inclusive), world years.
+    pub start_age_years: u32,
+    /// School age ends (exclusive; must be ≤ working age), world years.
+    pub end_age_years: u32,
+    /// School hours (0..24; the attendance bias window).
+    pub start_hour: u8,
+    /// End of the school day.
+    pub end_hour: u8,
+    /// One attendance stint, ticks.
+    pub attend_ticks: u32,
+    /// The location kind (from `data/locations.ron`) attendance targets.
+    pub location_kind_id: String,
+    /// Score bias for the AttendSchool candidate during school hours
+    /// (micro units; obligations bias, never dictate).
+    pub attend_bias_micro: i64,
+}
+
+/// `data/skills.ron` (ADR 0010 §1).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SkillsConfig {
+    /// The skill list (order = the `Skills.levels` vector order).
+    pub skills: Vec<SkillDef>,
+    /// The education pipeline.
+    pub school: SchoolDef,
+    /// Per-mille mastery of the recipe's skill gained per worked shift.
+    pub doing_gain_per_shift_per_mille: u16,
+    /// Labor bids scale by `1 + weight/1000 × level/1000` at mastery.
+    pub labor_skill_weight_per_mille: i64,
+    /// The skill the public employer's slots reward.
+    pub public_skill_id: String,
+}
+
+/// One fertility band (Phase 7, ADR 0010 §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FertilityBand {
+    /// Inclusive lower age bound (world years) — the mother's age.
+    pub min_age_years: u32,
+    /// Inclusive upper age bound.
+    pub max_age_years: u32,
+    /// Daily birth probability in per-billion units.
+    pub per_day_chance_per_billion: u32,
+}
+
+/// `data/balance/fertility.ron` (ADR 0010 §4).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FertilityConfig {
+    /// Age bands (validated: ordered, non-overlapping).
+    pub bands: Vec<FertilityBand>,
+    /// No births into households at or above this size.
+    pub max_household_size: u32,
+    /// A child's trait = parents' midpoint ± up to this per-mille.
+    pub trait_mutation_per_mille: u16,
+}
+
+impl FertilityConfig {
+    /// The daily birth chance (per-billion) for a mother aged
+    /// `age_years` (0 outside every band).
+    pub fn per_day_chance(&self, age_years: u32) -> u32 {
+        for band in &self.bands {
+            if age_years >= band.min_age_years && age_years <= band.max_age_years {
+                return band.per_day_chance_per_billion;
+            }
+        }
+        0
+    }
+}

@@ -1,0 +1,19 @@
+// The social graph and gossip (SPEC §11; ADR 0010 §§2-3).
+SocialConfig(
+    // Bounded edges per citizen; the weakest non-kin edge evicts.
+    edge_cap: 12,
+    // Shared leisure grows bonds; absence decays them (per-mille).
+    friend_drift_per_meeting_per_mille: 30,
+    romance_drift_per_meeting_per_mille: 25,
+    decay_per_day_per_mille: 5,
+    // Romance only sparks when both singles' sociability product
+    // clears this (per-mille of per-mille — 1000 x 1000 scale / 1000).
+    romance_min_sociability_product_per_mille: 90,
+    // A romance edge at or above this marries (ADR 0010 par.4).
+    marriage_threshold_per_mille: 700,
+    // Utility: each present friend multiplies social-need gain by
+    // (1 + weight/1000 x strength/1000).
+    social_bond_weight_per_mille: 400,
+    // Price beliefs: bounded rows; gossip averages two beliefs.
+    belief_cap: 8,
+)

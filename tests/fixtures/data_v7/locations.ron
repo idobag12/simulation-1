@@ -40,6 +40,9 @@ LocationsConfig(kinds: [
     LocationKindDef(id: "forest_camp", is_home: false, count: 0, satisfies: []),
     LocationKindDef(id: "mill",        is_home: false, count: 0, satisfies: []),
     // Phase 6 (ADR 0009): the treasury's town hall and the builder's yard.
+    // The school (Phase 7, ADR 0010 par.1): the education pipeline's
+    // place, publicly run (no firm claims it).
+    LocationKindDef(id: "school", is_home: false, count: 1, satisfies: []),
     LocationKindDef(id: "town_hall",    is_home: false, count: 0, satisfies: []),
     LocationKindDef(id: "builder_yard", is_home: false, count: 0, satisfies: []),
 ])

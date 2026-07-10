@@ -36,6 +36,10 @@ pub struct RecipeDef {
     /// A completed batch yields a new home instead of goods (Phase 6).
     #[serde(default)]
     pub builds_home: bool,
+    /// The skill this recipe trains and rewards (Phase 7, ADR 0010 §1);
+    /// `None` = unskilled work.
+    #[serde(default)]
+    pub skill_id: Option<String>,
 }
 
 /// `data/recipes.ron`.
@@ -166,6 +170,8 @@ pub struct RecipeTable {
     pub batch_hours: u32,
     /// A completed batch yields a new home (Phase 6, ADR 0009 §5).
     pub builds_home: bool,
+    /// The skill (data order) this recipe trains and rewards, if any.
+    pub skill: Option<u32>,
 }
 
 /// One resolved firm kind.
@@ -235,4 +241,9 @@ pub struct EconTables {
     pub labor: LaborTables,
     /// Banking/housing/taxes tunables (Phase 6, ADR 0009).
     pub money: crate::config_money::MoneyTables,
+    /// Labor bids scale by `1 + weight/1000 × skill/1000` of the
+    /// recipe's skill (Phase 7, ADR 0010 §1).
+    pub labor_skill_weight_per_mille: i64,
+    /// The skill (data order) the public employer's slots reward.
+    pub public_skill: u32,
 }

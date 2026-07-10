@@ -259,3 +259,178 @@ pub(crate) fn validate_money(
     }
     Ok(())
 }
+
+/// Phase 7 social-layer validation (ADR 0010 §7): skills/school,
+/// the social graph, and fertility.
+pub(crate) fn validate_social(
+    data_root: &Path,
+    skills: &sim_people::config::SkillsConfig,
+    social: &sim_ai::config::SocialConfig,
+    fertility: &sim_people::config::FertilityConfig,
+    recipes: &sim_economy::config::RecipesConfig,
+    people: &sim_people::config::PeopleConfig,
+    locations: &sim_world::config::LocationsConfig,
+    min_working_age_years: u32,
+) -> Result<(), DataError> {
+    let e = |file: &str, message: String| verr(data_root, file, message);
+
+    let k = "skills.ron";
+    if skills.skills.is_empty() {
+        return Err(e(k, "at least one skill must be defined".into()));
+    }
+    for (index, skill) in skills.skills.iter().enumerate() {
+        if skill.id.is_empty() {
+            return Err(e(k, "skill ids must be non-empty".into()));
+        }
+        if skills.skills[..index].iter().any(|s| s.id == skill.id) {
+            return Err(e(k, format!("duplicate skill id `{}`", skill.id)));
+        }
+    }
+    let skill_exists = |id: &str| skills.skills.iter().any(|s| s.id == id);
+    if !skill_exists(&skills.school.taught_skill_id) {
+        return Err(e(
+            k,
+            format!(
+                "school taught_skill_id `{}` is not a defined skill",
+                skills.school.taught_skill_id
+            ),
+        ));
+    }
+    if !skill_exists(&skills.public_skill_id) {
+        return Err(e(
+            k,
+            format!(
+                "public_skill_id `{}` is not a defined skill",
+                skills.public_skill_id
+            ),
+        ));
+    }
+    let school = &skills.school;
+    if school.start_age_years >= school.end_age_years
+        || school.end_age_years > min_working_age_years
+    {
+        return Err(e(
+            k,
+            "school ages must satisfy start < end <= min_working_age".into(),
+        ));
+    }
+    if school.start_hour >= school.end_hour || school.end_hour > 24 {
+        return Err(e(k, "school hours must satisfy start < end <= 24".into()));
+    }
+    if school.attend_ticks == 0 {
+        return Err(e(k, "attend_ticks must be >= 1".into()));
+    }
+    if school.gain_per_attendance_per_mille == 0
+        || school.gain_per_attendance_per_mille > 1000
+        || skills.doing_gain_per_shift_per_mille > 1000
+    {
+        return Err(e(
+            k,
+            "skill gains must be within 1..=1000 (school) and 0..=1000 (doing)".into(),
+        ));
+    }
+    if !(0..=1000).contains(&skills.labor_skill_weight_per_mille) {
+        return Err(e(
+            k,
+            "labor_skill_weight_per_mille must be within 0..=1000".into(),
+        ));
+    }
+    let Some(kind) = locations
+        .kinds
+        .iter()
+        .find(|kind| kind.id == school.location_kind_id)
+    else {
+        return Err(e(
+            k,
+            format!(
+                "school location_kind_id `{}` is not a defined location kind",
+                school.location_kind_id
+            ),
+        ));
+    };
+    if kind.is_home || kind.count == 0 {
+        return Err(e(
+            k,
+            "the school kind must be public with count >= 1 (children must \
+             be able to attend from day one)"
+                .into(),
+        ));
+    }
+    for recipe in &recipes.recipes {
+        if let Some(id) = &recipe.skill_id
+            && !skill_exists(id)
+        {
+            return Err(e(
+                "recipes.ron",
+                format!("recipe `{}` names unknown skill `{id}`", recipe.id),
+            ));
+        }
+    }
+
+    let s = "balance/social.ron";
+    if social.edge_cap == 0 || social.belief_cap == 0 {
+        return Err(e(s, "edge_cap and belief_cap must be >= 1".into()));
+    }
+    for (name, value) in [
+        (
+            "friend_drift_per_meeting_per_mille",
+            social.friend_drift_per_meeting_per_mille,
+        ),
+        (
+            "romance_drift_per_meeting_per_mille",
+            social.romance_drift_per_meeting_per_mille,
+        ),
+        ("decay_per_day_per_mille", social.decay_per_day_per_mille),
+        (
+            "romance_min_sociability_product_per_mille",
+            social.romance_min_sociability_product_per_mille,
+        ),
+    ] {
+        if !(0..=1000).contains(&value) {
+            return Err(e(s, format!("{name} must be within 0..=1000")));
+        }
+    }
+    if !(1..=1000).contains(&social.marriage_threshold_per_mille) {
+        return Err(e(
+            s,
+            "marriage_threshold_per_mille must be within 1..=1000".into(),
+        ));
+    }
+    if !(0..=1000).contains(&social.social_bond_weight_per_mille) {
+        return Err(e(
+            s,
+            "social_bond_weight_per_mille must be within 0..=1000".into(),
+        ));
+    }
+
+    let f = "balance/fertility.ron";
+    let mut last_max: Option<u32> = None;
+    for band in &fertility.bands {
+        if band.min_age_years > band.max_age_years {
+            return Err(e(f, "fertility band min must be <= max".into()));
+        }
+        if let Some(last) = last_max
+            && band.min_age_years <= last
+        {
+            return Err(e(
+                f,
+                "fertility bands must be ascending and non-overlapping".into(),
+            ));
+        }
+        if band.per_day_chance_per_billion > 1_000_000_000 {
+            return Err(e(f, "fertility chance exceeds certainty".into()));
+        }
+        last_max = Some(band.max_age_years);
+    }
+    if fertility.max_household_size < 2 {
+        return Err(e(
+            f,
+            "max_household_size must be >= 2 (a couple lives there)".into(),
+        ));
+    }
+    if fertility.trait_mutation_per_mille > 1000 {
+        return Err(e(f, "trait_mutation_per_mille must be <= 1000".into()));
+    }
+    let _ = people;
+    Ok(())
+}

@@ -1,0 +1,26 @@
+// Skills and the education pipeline (SPEC §11/§12; ADR 0010 §1).
+SkillsConfig(
+    skills: [
+        SkillDef(id: "letters"),
+        SkillDef(id: "craft"),
+    ],
+    school: SchoolDef(
+        // The school teaches letters between the data ages, inside the
+        // data hours; each completed attendance raises the skill.
+        taught_skill_id: "letters",
+        gain_per_attendance_per_mille: 8,
+        start_age_years: 6,
+        end_age_years: 16,
+        start_hour: 9,
+        end_hour: 14,
+        attend_ticks: 120,
+        location_kind_id: "school",
+        attend_bias_micro: 500000,
+    ),
+    // Working a shift raises the recipe's skill (learning by doing).
+    doing_gain_per_shift_per_mille: 2,
+    // A firm's labor bid scales up to this much at mastery.
+    labor_skill_weight_per_mille: 600,
+    // The public employer's slots reward the taught skill.
+    public_skill_id: "letters",
+)

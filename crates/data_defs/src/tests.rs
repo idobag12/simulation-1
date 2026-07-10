@@ -39,6 +39,7 @@ const GOOD_LOCATIONS: &str = r#"LocationsConfig(kinds: [
         ]),
         LocationKindDef(id: "shop", is_home: false, count: 0, satisfies: []),
         LocationKindDef(id: "town_hall", is_home: false, count: 0, satisfies: []),
+        LocationKindDef(id: "school", is_home: false, count: 1, satisfies: []),
     ])"#;
 const GOOD_GOODS: &str = r#"GoodsConfig(goods: [
         GoodDef(id: "bread", spoil_per_mille: 100),
@@ -68,6 +69,27 @@ const GOOD_HOUSING: &str = r#"HousingConfig(
         purchase_period_days: 10, home_price_mills: 30000, buyer_savings_per_mille: 300,
         home_bid_per_mille: 1500, mortgage_ltv_per_mille: 700,
         construction_margin_per_mille: 300,
+    )"#;
+const GOOD_SKILLS: &str = r#"SkillsConfig(
+        skills: [SkillDef(id: "letters"), SkillDef(id: "craft")],
+        school: SchoolDef(taught_skill_id: "letters", gain_per_attendance_per_mille: 8,
+            start_age_years: 6, end_age_years: 16, start_hour: 9, end_hour: 14,
+            attend_ticks: 120, location_kind_id: "school", attend_bias_micro: 500000),
+        doing_gain_per_shift_per_mille: 2, labor_skill_weight_per_mille: 600,
+        public_skill_id: "letters",
+    )"#;
+const GOOD_SOCIAL: &str = r#"SocialConfig(
+        edge_cap: 12, friend_drift_per_meeting_per_mille: 30,
+        romance_drift_per_meeting_per_mille: 25, decay_per_day_per_mille: 5,
+        romance_min_sociability_product_per_mille: 90, marriage_threshold_per_mille: 700,
+        social_bond_weight_per_mille: 400, belief_cap: 8,
+    )"#;
+const GOOD_FERTILITY: &str = r#"FertilityConfig(
+        bands: [
+            FertilityBand(min_age_years: 16, max_age_years: 24, per_day_chance_per_billion: 9000000),
+            FertilityBand(min_age_years: 25, max_age_years: 34, per_day_chance_per_billion: 7000000),
+        ],
+        max_household_size: 6, trait_mutation_per_mille: 120,
     )"#;
 const GOOD_TAXES: &str = r#"TaxesConfig(
         income_per_mille: 100, sales_per_mille: 50, treasury_seed_mills: 50000,
@@ -126,6 +148,9 @@ pub(crate) fn write_tree(overrides: &[(&str, &str)]) -> PathBuf {
         ("balance/bank.ron", GOOD_BANK),
         ("balance/housing.ron", GOOD_HOUSING),
         ("balance/taxes.ron", GOOD_TAXES),
+        ("skills.ron", GOOD_SKILLS),
+        ("balance/social.ron", GOOD_SOCIAL),
+        ("balance/fertility.ron", GOOD_FERTILITY),
     ];
     for (rel, content) in base {
         let path = root.join(rel);
@@ -151,7 +176,7 @@ fn valid_data_loads() {
     assert_eq!(defs.people.needs.needs.len(), 1);
     assert_eq!(defs.people.mortality.per_day_chance(61), 5_000_000);
     let tables = resolve_ai(&defs);
-    assert_eq!(tables.kind_is_home, vec![true, false, false, false]);
+    assert_eq!(tables.kind_is_home, vec![true, false, false, false, false]);
     assert_eq!(tables.kind_satisfiers[1], vec![(0, 9000)]);
     assert_eq!(tables.rest_need, 0);
     assert_eq!(tables.need_trait[0], Some((0, 500)));
