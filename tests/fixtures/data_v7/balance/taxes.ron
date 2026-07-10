@@ -1,0 +1,9 @@
+// Taxes and the public employer (SPEC §12; ADR 0009 §4).
+TaxesConfig(
+    income_per_mille: 100,
+    sales_per_mille: 50,
+    treasury_seed_mills: 100000,
+    public_positions: 6,
+    public_wage_bid_mills: 260,
+    public_location_kind_id: "town_hall",
+)

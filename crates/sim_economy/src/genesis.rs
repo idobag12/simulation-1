@@ -9,7 +9,8 @@
 //! identities hold from tick 0.
 
 use core_ecs::sim_interface::{
-    EconCounters, FirmBooks, Inventory, LaborStats, Location, RetailOffer, Wallet,
+    BankBook, EconCounters, FirmBooks, Inventory, LaborStats, Location, RetailOffer, TreasuryBook,
+    Wallet,
 };
 use core_ecs::{EcsError, World};
 use core_types::Money;
@@ -28,6 +29,54 @@ pub fn populate(world: &mut World, tables: &EconTables) -> Result<(), EcsError> 
     world.insert(ledger, Wallet { cash: Money::ZERO })?;
     // The labor ledger (ADR 0008 §5), written by each daily clearing.
     world.insert(ledger, LaborStats::default())?;
+
+    // The bank (ADR 0009 §§1–2): one vault, seeded with equity — counted
+    // in issuance below like every other genesis wallet.
+    let bank = world.spawn();
+    world.insert(
+        bank,
+        Wallet {
+            cash: Money::from_mills(tables.money.bank.equity_seed_mills),
+        },
+    )?;
+    world.insert(
+        bank,
+        BankBook {
+            equity: Money::from_mills(tables.money.bank.equity_seed_mills),
+            policy_rate_per_million_daily: tables.money.bank.policy_neutral_per_million_daily,
+            last_price_index_milli: 0,
+            deposits: Vec::new(),
+            loans: Vec::new(),
+            interest_received: Money::ZERO,
+            deposit_interest_paid: Money::ZERO,
+        },
+    )?;
+
+    // The treasury (ADR 0009 §4): the public employer's wallet, books
+    // (payroll like any employer's; taxes book as revenue), receipt
+    // counters, and its town-hall workplace.
+    let treasury = world.spawn();
+    world.insert(
+        treasury,
+        Wallet {
+            cash: tables.money.treasury_seed,
+        },
+    )?;
+    world.insert(
+        treasury,
+        FirmBooks {
+            initial_cash: tables.money.treasury_seed,
+            revenue: Money::ZERO,
+            expenses: Money::ZERO,
+        },
+    )?;
+    world.insert(treasury, TreasuryBook::default())?;
+    world.insert(
+        treasury,
+        Location {
+            kind: tables.money.public_location_kind,
+        },
+    )?;
 
     let mut seeded_goods: Vec<i64> = vec![0; tables.goods];
     for (kind_index, kind) in tables.firm_kinds.iter().enumerate() {
@@ -76,10 +125,13 @@ pub fn populate(world: &mut World, tables: &EconTables) -> Result<(), EcsError> 
                 },
             )?;
             if let Some((need_index, gain_per_unit, use_ticks)) = kind.retail {
+                let (output_good, _) = recipe.output.ok_or(EcsError::InternalCorruption(
+                    "a retail firm kind must have a goods output (validated)",
+                ))?;
                 world.insert(
                     firm,
                     RetailOffer {
-                        good: recipe.output_good,
+                        good: output_good,
                         need_index,
                         gain_per_unit,
                         use_ticks,

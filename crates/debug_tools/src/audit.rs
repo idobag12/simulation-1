@@ -4,7 +4,7 @@
 //! aborts the tick and halts the run. Also checks every firm's
 //! double-entry slice (ADR 0007 §3).
 
-use core_ecs::sim_interface::{EconCounters, FirmBooks, Inventory, Wallet};
+use core_ecs::sim_interface::{BankBook, EconCounters, FirmBooks, Inventory, Wallet};
 use core_ecs::{CommandBuffer, EcsError, System, TickContext, World};
 use core_types::Money;
 
@@ -95,6 +95,44 @@ pub fn audit_economy(world: &World) -> Result<bool, EcsError> {
         }
     }
 
+    // The vault identity (Phase 6, ADR 0009 §1):
+    // `bank wallet == Σ deposits + equity − Σ outstanding principal`,
+    // with every row non-negative.
+    if let Some((bank, book)) = world.iter::<BankBook>()?.next() {
+        let mut deposits = Money::ZERO;
+        for (owner, balance) in &book.deposits {
+            if *balance < Money::ZERO {
+                return Err(EcsError::InvariantViolation(format!(
+                    "entity #{}'s deposit row is negative",
+                    owner.index()
+                )));
+            }
+            deposits = deposits.try_add(*balance)?;
+        }
+        let mut outstanding = Money::ZERO;
+        for loan in &book.loans {
+            if loan.principal < Money::ZERO {
+                return Err(EcsError::InvariantViolation(format!(
+                    "entity #{}'s loan principal is negative",
+                    loan.borrower.index()
+                )));
+            }
+            outstanding = outstanding.try_add(loan.principal)?;
+        }
+        let vault = world
+            .get::<Wallet>(bank)?
+            .map(|wallet| wallet.cash)
+            .unwrap_or(Money::ZERO);
+        let expected = deposits.try_add(book.equity)?.try_sub(outstanding)?;
+        if vault != expected {
+            return Err(EcsError::InvariantViolation(format!(
+                "the vault does not balance: bank wallet = {vault} but \
+                 deposits {deposits} + equity {} − outstanding {outstanding} = {expected}",
+                book.equity
+            )));
+        }
+    }
+
     // Ledgers: the double-entry slice, per firm.
     for (entity, books) in world.iter::<FirmBooks>()? {
         let cash = world
@@ -147,6 +185,7 @@ mod tests {
         world.register::<Inventory>().expect("register");
         world.register::<FirmBooks>().expect("register");
         world.register::<EconCounters>().expect("register");
+        world.register::<BankBook>().expect("register");
         world
     }
 

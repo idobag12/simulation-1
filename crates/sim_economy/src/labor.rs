@@ -90,13 +90,25 @@ impl System for PayrollSystem {
         }
 
         // Redundancy: fire highest-indexed extras down to positions.
+        // The treasury is an employer without a `Firm` — its slot count
+        // is the data `public_positions` (ADR 0009 §4), not zero.
         let mut fired: Vec<Entity> = Vec::new();
         for (citizen, employer, _) in roster.iter().rev() {
-            let positions = world
-                .get::<Firm>(*employer)?
-                .and_then(|firm| self.tables.firm_kinds.get(firm.kind as usize))
-                .map(|kind| kind.positions)
-                .unwrap_or(0);
+            let positions = match world.get::<Firm>(*employer)? {
+                Some(firm) => self
+                    .tables
+                    .firm_kinds
+                    .get(firm.kind as usize)
+                    .map(|kind| kind.positions)
+                    .unwrap_or(0),
+                None if world
+                    .get::<core_ecs::sim_interface::TreasuryBook>(*employer)?
+                    .is_some() =>
+                {
+                    self.tables.money.public_positions
+                }
+                None => 0,
+            };
             let count = headcount.entry(employer.index()).or_insert(0);
             if *count > positions {
                 *count -= 1;
@@ -121,7 +133,13 @@ impl System for PayrollSystem {
                 .map(|wallet| wallet.cash)
                 .unwrap_or(Money::ZERO);
             if cash >= wage {
-                transfer_wage(world, employer, citizen, wage)?;
+                transfer_wage(
+                    world,
+                    employer,
+                    citizen,
+                    wage,
+                    self.tables.money.income_per_mille,
+                )?;
             } else {
                 world.remove::<Employment>(citizen)?;
                 world.emit(&Fired {
@@ -136,14 +154,18 @@ impl System for PayrollSystem {
     }
 }
 
-/// The wage transfer (ADR 0008 §4): employer wallet → employee wallet,
-/// booked as employer expense — employees carry no books. Every leg is
-/// structurally required (ADR 0007 §8b).
+/// The wage transfer (ADR 0008 §4; ADR 0009 §4): employer wallet →
+/// employee wallet, with income tax withheld to the treasury in the same
+/// atomic call, booked as employer expense (the full wage) and treasury
+/// revenue (the tax). Every leg is structurally required (ADR 0007 §8b);
+/// worlds without a treasury (migrated) withhold nothing, and the
+/// treasury's own payroll is not taxed back into itself.
 fn transfer_wage(
     world: &mut World,
     employer: Entity,
     employee: Entity,
     wage: Money,
+    income_tax_per_mille: i64,
 ) -> Result<(), EcsError> {
     let missing = |leg: &str, entity: Entity| {
         EcsError::InvariantViolation(format!(
@@ -151,6 +173,16 @@ fn transfer_wage(
             entity.index()
         ))
     };
+    let treasury = world
+        .iter::<core_ecs::sim_interface::TreasuryBook>()?
+        .next()
+        .map(|(entity, _)| entity)
+        .filter(|treasury| *treasury != employer);
+    let tax = match treasury {
+        Some(_) => Money::from_mills(wage.mills() * income_tax_per_mille / 1000),
+        None => Money::ZERO,
+    };
+    let net = wage.try_sub(tax)?;
     let wallet = world
         .get_mut::<Wallet>(employer)?
         .ok_or_else(|| missing("employer wallet", employer))?;
@@ -158,11 +190,31 @@ fn transfer_wage(
     let wallet = world
         .get_mut::<Wallet>(employee)?
         .ok_or_else(|| missing("employee wallet", employee))?;
-    wallet.cash = wallet.cash.try_add(wage)?;
+    wallet.cash = wallet.cash.try_add(net)?;
     let books = world
         .get_mut::<core_ecs::sim_interface::FirmBooks>(employer)?
         .ok_or_else(|| missing("employer books", employer))?;
     books.expenses = books.expenses.try_add(wage)?;
+    if let Some(treasury) = treasury
+        && tax > Money::ZERO
+    {
+        let wallet = world
+            .get_mut::<Wallet>(treasury)?
+            .ok_or_else(|| missing("treasury wallet", treasury))?;
+        wallet.cash = wallet.cash.try_add(tax)?;
+        let books = world
+            .get_mut::<core_ecs::sim_interface::FirmBooks>(treasury)?
+            .ok_or_else(|| missing("treasury books", treasury))?;
+        books.revenue = books.revenue.try_add(tax)?;
+        if let Some(book) = world.get_mut::<core_ecs::sim_interface::TreasuryBook>(treasury)? {
+            book.income_tax_received = book.income_tax_received.try_add(tax)?;
+        }
+        world.emit(&core_ecs::sim_interface::TaxCollected {
+            payer: employee,
+            amount: tax,
+            kind: core_ecs::sim_interface::TaxKind::Income,
+        })?;
+    }
     Ok(())
 }
 
@@ -239,15 +291,20 @@ impl LaborMarketSystem {
                 ))?;
         let shift_hours = i64::from(self.tables.labor.shift_end_hour)
             - i64::from(self.tables.labor.shift_start_hour);
-        let batches_per_day = (shift_hours / i64::from(recipe.batch_hours.max(1))).max(0);
-        let daily_output = recipe
-            .output_quantity
-            .checked_mul(batches_per_day)
-            .ok_or_else(|| overflow("bid output"))?;
-        let marginal = daily_output
-            .checked_mul(posted_price.mills())
-            .ok_or_else(|| overflow("bid product"))?
-            / i64::from(kind.positions.max(1));
+        // Expected daily value per worker: batch value × shift hours /
+        // (batch hours × positions) — fractional in hours, so multi-day
+        // batches (construction) still value their workers. A builder's
+        // batch value is the home it finishes (ADR 0009 §5).
+        let batch_value = match recipe.output {
+            Some((_, quantity)) => quantity
+                .checked_mul(posted_price.mills())
+                .ok_or_else(|| overflow("bid product"))?,
+            None => self.tables.money.housing.home_price_mills,
+        };
+        let marginal = batch_value
+            .checked_mul(shift_hours)
+            .ok_or_else(|| overflow("bid hours"))?
+            / (i64::from(recipe.batch_hours.max(1)) * i64::from(kind.positions.max(1)));
         let bid = marginal
             .checked_mul(self.tables.labor.bid_fraction_per_mille)
             .ok_or_else(|| overflow("bid fraction"))?
@@ -279,6 +336,15 @@ impl System for LaborMarketSystem {
             return Ok(()); // no economy at all (migrated pre-v5 world)
         };
 
+        // Deposit balances (Phase 6, ADR 0009 §2): the reservation's
+        // wealth term reads wallet + vault.
+        let mut vault: BTreeMap<u32, i64> = BTreeMap::new();
+        if let Some((_, book)) = world.iter::<core_ecs::sim_interface::BankBook>()?.next() {
+            for (owner, balance) in &book.deposits {
+                vault.insert(owner.index(), balance.mills());
+            }
+        }
+
         // Pass 1 (immutable): asks — unemployed working-age citizens, in
         // entity order.
         let mut asks: Vec<(Entity, i64)> = Vec::new();
@@ -291,7 +357,8 @@ impl System for LaborMarketSystem {
             let cash = world
                 .get::<Wallet>(citizen)?
                 .map(|wallet| wallet.cash.mills())
-                .unwrap_or(0);
+                .unwrap_or(0)
+                + vault.get(&citizen.index()).copied().unwrap_or(0);
             let trait_per_mille = world
                 .get::<core_ecs::sim_interface::Personality>(citizen)?
                 .and_then(|personality| {
@@ -335,6 +402,34 @@ impl System for LaborMarketSystem {
             }
             for _ in 0..open {
                 bids.push((firm_entity, bid));
+            }
+        }
+        // The public employer (ADR 0009 §4): the treasury bids its data
+        // wage for its open town-hall slots, affordability-clamped like
+        // any firm.
+        if let Some((treasury, _)) = world
+            .iter::<core_ecs::sim_interface::TreasuryBook>()?
+            .next()
+        {
+            let employees = headcount.get(&treasury.index()).copied().unwrap_or(0);
+            let open = self.tables.money.public_positions.saturating_sub(employees);
+            if open > 0 {
+                let cash = world
+                    .get::<Wallet>(treasury)?
+                    .map(|wallet| wallet.cash.mills())
+                    .unwrap_or(0);
+                let committed_wages = committed.get(&treasury.index()).copied().unwrap_or(0);
+                let free = (cash - committed_wages).max(0);
+                let bid = self
+                    .tables
+                    .money
+                    .public_wage_bid_mills
+                    .min(free / i64::from(open));
+                if bid >= 1 {
+                    for _ in 0..open {
+                        bids.push((treasury, bid));
+                    }
+                }
             }
         }
         bids.sort_by_key(|(firm, bid)| (Reverse(*bid), firm.index()));

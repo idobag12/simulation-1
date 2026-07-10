@@ -16,17 +16,24 @@
 #![warn(missing_docs)]
 #![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+pub mod bank;
 pub mod components;
 pub mod config;
+pub mod config_money;
+mod construction;
 pub mod genesis;
+pub mod housing;
 pub mod labor;
 pub mod systems;
 mod transact;
 
+pub use bank::BankSystem;
 pub use components::{Firm, Production};
 pub use config::{
     EconTables, EconomyConfig, FirmDef, FirmsConfig, GoodQty, LaborConfig, LaborTables, RecipeDef,
     RecipesConfig, RetailDef,
 };
+pub use config_money::{BankConfig, HousingConfig, MoneyTables, TaxesConfig};
+pub use housing::{PurchaseMarketSystem, RentSystem, RentalMarketSystem};
 pub use labor::{LaborMarketSystem, PayrollSystem};
 pub use systems::{PricingSystem, ProductionSystem, TradeSystem};

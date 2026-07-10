@@ -70,6 +70,7 @@ pub fn resolve_ai(defs: &DataDefs) -> sim_ai::AiTables {
         work_ticks: defs.labor.work_ticks,
         work_need: need_index(&defs.labor.work_need_id),
         work_need_per_tick: defs.labor.work_need_per_tick,
+        sales_tax_per_mille: defs.taxes.sales_per_mille,
     }
 }
 
@@ -133,9 +134,12 @@ pub fn resolve_economy(defs: &DataDefs) -> sim_economy::EconTables {
                     .iter()
                     .map(|input| (good_index(&input.good_id), input.quantity))
                     .collect(),
-                output_good: good_index(&recipe.output.good_id),
-                output_quantity: recipe.output.quantity,
+                output: recipe
+                    .output
+                    .as_ref()
+                    .map(|output| (good_index(&output.good_id), output.quantity)),
                 batch_hours: recipe.batch_hours,
+                builds_home: recipe.builds_home,
             })
             .collect(),
         firm_kinds: defs
@@ -171,6 +175,17 @@ pub fn resolve_economy(defs: &DataDefs) -> sim_economy::EconTables {
             })
             .collect(),
         economy: defs.economy,
+        money: sim_economy::MoneyTables {
+            bank: defs.bank,
+            housing: defs.housing,
+            income_per_mille: defs.taxes.income_per_mille,
+            sales_per_mille: defs.taxes.sales_per_mille,
+            treasury_seed: core_types::Money::from_mills(defs.taxes.treasury_seed_mills),
+            public_positions: defs.taxes.public_positions,
+            public_wage_bid_mills: defs.taxes.public_wage_bid_mills,
+            public_location_kind: location_kind_index(&defs.taxes.public_location_kind_id),
+            home_location_kind: defs.locations.home_kind().unwrap_or(0),
+        },
         labor: sim_economy::config::LaborTables {
             shift_start_hour: defs.labor.shift_start_hour,
             shift_end_hour: defs.labor.shift_end_hour,

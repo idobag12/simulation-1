@@ -3,7 +3,7 @@
 //! passes plain entity lists — `sim_world` never reads another sim
 //! crate's components (SPEC §4).
 
-use core_ecs::sim_interface::{Location, Position, Residence};
+use core_ecs::sim_interface::{Location, Ownership, Position, Residence, WorkingAge};
 use core_ecs::{EcsError, Entity, World};
 
 use crate::config::LocationsConfig;
@@ -49,6 +49,19 @@ pub fn place_households(
     for members in households {
         let home = world.spawn();
         world.insert(home, Location { kind: home_kind })?;
+        // Ownership (Phase 6, ADR 0009 §3): the household's first
+        // working-age member owns the home; a household of minors falls
+        // to its first member (deterministic — member lists are sorted).
+        let mut owner = members.first().copied();
+        for member in members {
+            if world.get::<WorkingAge>(*member)?.is_some() {
+                owner = Some(*member);
+                break;
+            }
+        }
+        if let Some(owner) = owner {
+            world.insert(home, Ownership { owner })?;
+        }
         for member in members {
             world.insert(*member, Position { at: home })?;
             world.insert(*member, Residence { home })?;

@@ -136,6 +136,9 @@ pub struct AiTables {
     pub work_need: u32,
     /// Per-tick per-million gain of that need while working.
     pub work_need_per_tick: i64,
+    /// Sales tax split out of every retail purchase, per-mille
+    /// (Phase 6, from `data/balance/taxes.ron`).
+    pub sales_tax_per_mille: i64,
 }
 
 impl AiTables {

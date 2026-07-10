@@ -110,7 +110,7 @@ pub fn load_config(defs: &DataDefs) -> Result<LoadConfig, RunnerError> {
 /// migration. History: v2 = fixture set; v3 = + people set; v4 = + world/
 /// AI set (Phase 3, ADR 0006 §8); v5 = + economy set (Phase 4,
 /// ADR 0007 §9 — components AND the two economy events); v6 = + labor
-/// set (Phase 5, ADR 0008 §8).
+/// set (Phase 5, ADR 0008 §8); v7 = + money set (Phase 6, ADR 0009 §6).
 pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register::<fixture::FixtureWealth>()?;
     world.register::<fixture::FixtureTag>()?;
@@ -135,6 +135,11 @@ pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register::<core_ecs::sim_interface::Employment>()?;
     world.register::<core_ecs::sim_interface::LaborStats>()?;
     world.register::<core_ecs::sim_interface::WorkingAge>()?;
+    world.register::<core_ecs::sim_interface::BankBook>()?;
+    world.register::<core_ecs::sim_interface::TreasuryBook>()?;
+    world.register::<core_ecs::sim_interface::Ownership>()?;
+    world.register::<core_ecs::sim_interface::Tenancy>()?;
+    world.register::<core_ecs::sim_interface::BorrowerStatus>()?;
     world.register_event::<fixture::FixtureChurn>()?;
     world.register_event::<fixture::FixtureAlarm>()?;
     world.register_event::<sim_people::PersonDied>()?;
@@ -142,6 +147,12 @@ pub fn register_world(world: &mut World) -> Result<(), EcsError> {
     world.register_event::<core_ecs::sim_interface::PriceChanged>()?;
     world.register_event::<core_ecs::sim_interface::Hired>()?;
     world.register_event::<core_ecs::sim_interface::Fired>()?;
+    world.register_event::<core_ecs::sim_interface::LoanGranted>()?;
+    world.register_event::<core_ecs::sim_interface::LoanDefaulted>()?;
+    world.register_event::<core_ecs::sim_interface::TenancyStarted>()?;
+    world.register_event::<core_ecs::sim_interface::HomeSold>()?;
+    world.register_event::<core_ecs::sim_interface::HomeBuilt>()?;
+    world.register_event::<core_ecs::sim_interface::TaxCollected>()?;
     Ok(())
 }
 
@@ -181,12 +192,14 @@ pub fn derive_spec_from_world(world: &World) -> Result<WorldSpec, EcsError> {
 ///   advance, so a fresh decision starts moving the same tick).
 /// - Hour: econ.production (batches settle before the day's deciding),
 ///   then ai.plan (compile hour only), then needs decay (towns only).
-/// - Day (ADR 0007 §5, ADR 0008 §4): debug.audit FIRST (validates
-///   yesterday before today moves anything), then people.working_age
-///   (today's newly-of-age join the labor force), econ.payroll (wages
-///   paid or firings), econ.labor_market (the daily clearing), then
-///   econ.trade, econ.pricing, goods.spoilage, and mortality last
-///   (towns only).
+/// - Day (ADR 0007 §5, ADR 0008 §4, ADR 0009): debug.audit FIRST
+///   (validates yesterday before today moves anything), then
+///   people.working_age, econ.bank (policy rule, loan servicing and
+///   origination, deposits), econ.payroll (wages with income tax
+///   withheld), econ.labor_market (the daily clearing incl. the public
+///   employer), econ.rent (tenancies pay or evict), econ.rental_market,
+///   econ.purchase_market (every N days), then econ.trade, econ.pricing,
+///   goods.spoilage, and mortality last (towns only).
 ///
 /// The town list is scheduled when the world has citizens OR an economy
 /// (ADR 0007 §8b): firms keep working after the last citizen dies, and
@@ -232,11 +245,24 @@ pub fn build_schedule(spec: &WorldSpec, defs: &DataDefs) -> Schedule {
         );
         schedule.add_system(
             Rate::Day,
+            Box::new(sim_economy::BankSystem::new(econ.clone())),
+        );
+        schedule.add_system(
+            Rate::Day,
             Box::new(sim_economy::PayrollSystem::new(econ.clone())),
         );
         schedule.add_system(
             Rate::Day,
             Box::new(sim_economy::LaborMarketSystem::new(econ.clone())),
+        );
+        schedule.add_system(Rate::Day, Box::new(sim_economy::RentSystem));
+        schedule.add_system(
+            Rate::Day,
+            Box::new(sim_economy::RentalMarketSystem::new(econ.clone())),
+        );
+        schedule.add_system(
+            Rate::Day,
+            Box::new(sim_economy::PurchaseMarketSystem::new(econ.clone())),
         );
         schedule.add_system(
             Rate::Day,

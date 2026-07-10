@@ -255,13 +255,28 @@ fn purchases_abort_cleanly_when_stock_or_cash_vanished() {
             .map(|(entity, _)| entity)
             .collect()
     };
+    // Total wealth = wallet + vault row: the day's banking may float
+    // cash into the vault mid-test (Phase 6), but an aborted purchase
+    // must leave the TOTAL untouched.
     let wallet = |world: &core_ecs::World, e: core_ecs::Entity| -> i64 {
-        world
+        let cash = world
             .get::<Wallet>(e)
             .expect("query")
             .expect("wallet")
             .cash
-            .mills()
+            .mills();
+        let vault = world
+            .iter::<core_ecs::sim_interface::BankBook>()
+            .expect("query")
+            .next()
+            .and_then(|(_, book)| {
+                book.deposits
+                    .iter()
+                    .find(|(owner, _)| *owner == e)
+                    .map(|(_, balance)| balance.mills())
+            })
+            .unwrap_or(0);
+        cash + vault
     };
 
     // Case 1: the shelf emptied (through the counted sink) before the
@@ -280,10 +295,13 @@ fn purchases_abort_cleanly_when_stock_or_cash_vanished() {
         .expect("insert");
     let cash_before = wallet(sim.world(), citizen);
     sim.step(&mut schedule).expect("step");
-    assert_eq!(
-        wallet(sim.world(), citizen),
-        cash_before,
-        "an aborted purchase must not move money"
+    // The tick's banking may credit a few mills of deposit interest, but
+    // an aborted purchase must not SPEND anything.
+    let cash_after = wallet(sim.world(), citizen);
+    assert!(
+        cash_after >= cash_before && cash_after - cash_before < 50,
+        "an aborted purchase must not move the buyer's money \
+         ({cash_before} -> {cash_after})"
     );
     assert!(
         sim.world()
@@ -339,7 +357,11 @@ fn purchases_abort_cleanly_when_stock_or_cash_vanished() {
         "the shelf is stocked; only the cash is gone"
     );
     sim.step(&mut schedule).expect("step");
-    assert_eq!(wallet(sim.world(), buyer), 0, "still broke, not negative");
+    assert_eq!(
+        wallet(sim.world(), buyer),
+        0,
+        "still broke (and never negative)"
+    );
     assert!(
         sim.world()
             .get::<sim_ai::CurrentAction>(buyer)

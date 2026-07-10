@@ -27,10 +27,15 @@ pub struct RecipeDef {
     pub id: String,
     /// Consumed per batch (may be empty: a harvest recipe).
     pub inputs: Vec<GoodQty>,
-    /// Produced per completed batch (exactly one good in Phase 4).
-    pub output: GoodQty,
+    /// Produced per completed batch. `None` is allowed only for
+    /// home-building recipes (Phase 6, ADR 0009 §5) — the home entity is
+    /// the output.
+    pub output: Option<GoodQty>,
     /// Batch duration in hours (≥ 1).
     pub batch_hours: u32,
+    /// A completed batch yields a new home instead of goods (Phase 6).
+    #[serde(default)]
+    pub builds_home: bool,
 }
 
 /// `data/recipes.ron`.
@@ -155,12 +160,12 @@ pub struct EconomyConfig {
 pub struct RecipeTable {
     /// `(good index, quantity)` consumed per batch.
     pub inputs: Vec<(u32, i64)>,
-    /// The good index produced.
-    pub output_good: u32,
-    /// Units produced per batch.
-    pub output_quantity: i64,
+    /// `(good index, units)` produced per batch; `None` = builds a home.
+    pub output: Option<(u32, i64)>,
     /// Batch duration in hours.
     pub batch_hours: u32,
+    /// A completed batch yields a new home (Phase 6, ADR 0009 §5).
+    pub builds_home: bool,
 }
 
 /// One resolved firm kind.
@@ -228,4 +233,6 @@ pub struct EconTables {
     pub economy: EconomyConfig,
     /// Labor-market tunables (Phase 5).
     pub labor: LaborTables,
+    /// Banking/housing/taxes tunables (Phase 6, ADR 0009).
+    pub money: crate::config_money::MoneyTables,
 }

@@ -328,7 +328,12 @@ pub fn economy(sim: &Simulation, defs: &DataDefs) -> Result<String, String> {
             .recipes
             .recipes
             .get(firm.recipe as usize)
-            .map(|r| r.output.good_id.as_str())
+            .map(|r| {
+                r.output
+                    .as_ref()
+                    .map(|output| output.good_id.as_str())
+                    .unwrap_or("homes")
+            })
             .unwrap_or("<unknown>");
         out.push_str(&format!(
             "firm #{} {kind}: posts {output} at {}\n",
@@ -380,6 +385,49 @@ pub fn economy(sim: &Simulation, defs: &DataDefs) -> Result<String, String> {
                 counters.spoiled.get(good).copied().unwrap_or(0),
             ));
         }
+    }
+    if let Some((bank, book)) = world
+        .iter::<core_ecs::sim_interface::BankBook>()
+        .map_err(err)?
+        .next()
+    {
+        let vault = world
+            .get::<core_ecs::sim_interface::Wallet>(bank)
+            .map_err(err)?
+            .map(|wallet| wallet.cash)
+            .unwrap_or(core_types::Money::ZERO);
+        let deposits: i64 = book
+            .deposits
+            .iter()
+            .map(|(_, balance)| balance.mills())
+            .sum();
+        let outstanding: i64 = book.loans.iter().map(|loan| loan.principal.mills()).sum();
+        out.push_str(&format!(
+            "bank: vault {vault}, deposits {}, equity {}, outstanding {} across {} loans, \
+             policy rate {}/million/day, interest {} in / {} out\n",
+            core_types::Money::from_mills(deposits),
+            book.equity,
+            core_types::Money::from_mills(outstanding),
+            book.loans.len(),
+            book.policy_rate_per_million_daily,
+            book.interest_received,
+            book.deposit_interest_paid,
+        ));
+    }
+    if let Some((treasury, book)) = world
+        .iter::<core_ecs::sim_interface::TreasuryBook>()
+        .map_err(err)?
+        .next()
+    {
+        let cash = world
+            .get::<core_ecs::sim_interface::Wallet>(treasury)
+            .map_err(err)?
+            .map(|wallet| wallet.cash)
+            .unwrap_or(core_types::Money::ZERO);
+        out.push_str(&format!(
+            "treasury: {cash} on hand, income tax {} / sales tax {} collected\n",
+            book.income_tax_received, book.sales_tax_received,
+        ));
     }
     if let Some((_, stats)) = world
         .iter::<core_ecs::sim_interface::LaborStats>()

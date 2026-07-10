@@ -29,14 +29,14 @@ fn tables() -> EconTables {
         recipes: vec![
             RecipeTable {
                 inputs: vec![],
-                output_good: 0,
-                output_quantity: 10,
+                output: Some((0, 10)),
+                builds_home: false,
                 batch_hours: 2,
             },
             RecipeTable {
                 inputs: vec![(0, 4)],
-                output_good: 1,
-                output_quantity: 12,
+                output: Some((1, 12)),
+                builds_home: false,
                 batch_hours: 2,
             },
         ],
@@ -83,6 +83,45 @@ fn tables() -> EconTables {
             reservation_trait_discount_per_mille: 400,
             bid_fraction_per_mille: 600,
         },
+        money: crate::MoneyTables {
+            bank: crate::BankConfig {
+                equity_seed_mills: 100_000,
+                target_cash_float_mills: 2_000,
+                deposit_spread_per_million_daily: 400,
+                loan_payroll_multiple_per_mille: 5_000,
+                working_capital_floor_days: 3,
+                serviceability_revenue_per_mille: 200,
+                risk_premium_per_million_daily: 400,
+                default_cooldown_days: 30,
+                repay_term_days: 60,
+                policy_neutral_per_million_daily: 800,
+                policy_target_inflation_per_mille: 0,
+                policy_sensitivity_per_million: 50,
+                policy_min_per_million_daily: 100,
+                policy_max_per_million_daily: 5_000,
+                index_period_days: 5,
+            },
+            housing: crate::HousingConfig {
+                upkeep_mills_per_day: 40,
+                rent_margin_per_mille: 250,
+                rent_bid_per_mille: 8,
+                purchase_period_days: 10,
+                home_price_mills: 30_000,
+                buyer_savings_per_mille: 300,
+                mortgage_ltv_per_mille: 700,
+                construction_margin_per_mille: 300,
+            },
+            income_per_mille: 100,
+            sales_per_mille: 50,
+            treasury_seed: Money::from_mills(50_000),
+            // Off in the shared tables so the Phase 4/5 clearing
+            // scenarios stay treasury-free; the public-employer test
+            // turns these on.
+            public_positions: 0,
+            public_wage_bid_mills: 0,
+            public_location_kind: 0,
+            home_location_kind: 0,
+        },
     }
 }
 
@@ -109,6 +148,21 @@ fn world_with_firms(tables: &EconTables) -> World {
     world
         .register::<core_ecs::sim_interface::WorkingAge>()
         .expect("register");
+    world
+        .register::<core_ecs::sim_interface::BankBook>()
+        .expect("register");
+    world
+        .register::<core_ecs::sim_interface::TreasuryBook>()
+        .expect("register");
+    world
+        .register::<core_ecs::sim_interface::Ownership>()
+        .expect("register");
+    world
+        .register::<core_ecs::sim_interface::Tenancy>()
+        .expect("register");
+    world
+        .register::<core_ecs::sim_interface::BorrowerStatus>()
+        .expect("register");
     world.register_event::<GoodsPurchased>().expect("register");
     world.register_event::<PriceChanged>().expect("register");
     world
@@ -116,6 +170,24 @@ fn world_with_firms(tables: &EconTables) -> World {
         .expect("register");
     world
         .register_event::<core_ecs::sim_interface::Fired>()
+        .expect("register");
+    world
+        .register_event::<core_ecs::sim_interface::LoanGranted>()
+        .expect("register");
+    world
+        .register_event::<core_ecs::sim_interface::LoanDefaulted>()
+        .expect("register");
+    world
+        .register_event::<core_ecs::sim_interface::TenancyStarted>()
+        .expect("register");
+    world
+        .register_event::<core_ecs::sim_interface::HomeSold>()
+        .expect("register");
+    world
+        .register_event::<core_ecs::sim_interface::HomeBuilt>()
+        .expect("register");
+    world
+        .register_event::<core_ecs::sim_interface::TaxCollected>()
         .expect("register");
     crate::genesis::populate(&mut world, tables).expect("genesis");
     world
@@ -162,7 +234,9 @@ fn counters(world: &World) -> EconCounters {
 fn genesis_records_issuance_and_seeded_stock() {
     let world = world_with_firms(&tables());
     let c = counters(&world);
-    assert_eq!(c.issued, Money::from_mills(20_000));
+    // Firm seeds (20k) + bank equity (100k) + treasury seed (50k): every
+    // genesis wallet counts as issuance (ADR 0009 §1).
+    assert_eq!(c.issued, Money::from_mills(170_000));
     assert_eq!(c.produced, vec![8, 0], "seeded stock counts as produced");
     assert_eq!(c.spoiled, vec![0, 0]);
 }
@@ -313,7 +387,9 @@ fn trade_is_bounded_by_buyer_cash_and_starved_firms_idle() {
     // must idle (input starvation — no batch, nothing consumed), and the
     // daily trade must buy only what the wallet affords.
     let mut tables = tables();
-    tables.firm_kinds[1].initial_cash = Money::from_mills(90);
+    // 190 = 100 committed wage (reserved by procurement, the Phase 5
+    // lesson) + 90 spendable at the till.
+    tables.firm_kinds[1].initial_cash = Money::from_mills(190);
     tables.firm_kinds[1].initial_inventory = vec![0, 0];
     let mut world = world_with_firms(&tables);
     let firms = firm_entities(&world);
@@ -345,10 +421,10 @@ fn trade_is_bounded_by_buyer_cash_and_starved_firms_idle() {
             .expect("some")
             .stock(0),
         2,
-        "the purchase is bounded by the buyer's cash"
+        "the purchase is bounded by the buyer's UNCOMMITTED cash"
     );
     let mill_wallet = world.get::<Wallet>(mill).expect("get").expect("some");
-    assert_eq!(mill_wallet.cash, Money::from_mills(10));
+    assert_eq!(mill_wallet.cash, Money::from_mills(110));
     assert!(mill_wallet.cash >= Money::ZERO, "wallets never go negative");
     let farm_books = world.get::<FirmBooks>(farm).expect("get").expect("some");
     assert_eq!(farm_books.revenue, Money::from_mills(80));
@@ -390,11 +466,27 @@ fn payroll_pays_booked_wages_and_fires_when_the_wallet_runs_dry() {
             .expect("get")
             .expect("some")
             .cash,
-        Money::from_mills(100),
-        "the worker got paid (workers spawn cashless here)"
+        Money::from_mills(90),
+        "the worker got the wage net of the 10% withholding \
+         (workers spawn cashless here)"
     );
     let books = world.get::<FirmBooks>(farm).expect("get").expect("some");
-    assert_eq!(books.expenses, Money::from_mills(100), "payroll is booked");
+    assert_eq!(
+        books.expenses,
+        Money::from_mills(100),
+        "payroll books the GROSS wage"
+    );
+    let treasury_book = world
+        .iter::<core_ecs::sim_interface::TreasuryBook>()
+        .expect("query")
+        .next()
+        .map(|(_, book)| *book)
+        .expect("treasury");
+    assert_eq!(
+        treasury_book.income_tax_received,
+        Money::from_mills(10),
+        "the withheld tax landed in the treasury"
+    );
 
     // Drain the firm (conserving: park its cash on the worker), then the
     // next payroll fires instead of paying.
@@ -557,8 +649,8 @@ fn payroll_fires_redundant_extras_down_to_positions() {
                 .expect("get")
                 .expect("some")
                 .cash,
-            Money::from_mills(100),
-            "keepers are paid normally"
+            Money::from_mills(90),
+            "keepers are paid normally (net of withholding)"
         );
     }
     world.begin_tick(Ticks::new(1));
@@ -649,4 +741,81 @@ fn bids_reserve_committed_payroll_before_funding_new_slots() {
             employment.wage_per_day
         );
     }
+}
+
+/// The public employer end to end (ADR 0009 §4): the treasury bids its
+/// data wage at the clearing, its hires SURVIVE the redundancy check
+/// (its slot count is `public_positions`, not a missing `Firm`'s zero),
+/// and payroll pays them GROSS from the treasury wallet — its own
+/// payroll is not taxed back into itself.
+#[test]
+fn the_treasury_employs_and_pays_public_workers() {
+    let mut tables = tables();
+    tables.money.public_positions = 2;
+    tables.money.public_wage_bid_mills = 200;
+    // Close the firms' slots so the treasury is the only bidder.
+    tables.firm_kinds[0].positions = 0;
+    tables.firm_kinds[1].positions = 0;
+    let mut world = world_with_firms(&tables);
+
+    // One cashless, maximally industrious seeker: ask = 150 − 60 = 90.
+    let seeker = world.spawn();
+    world
+        .insert(seeker, Wallet { cash: Money::ZERO })
+        .expect("insert");
+    world
+        .insert(
+            seeker,
+            core_ecs::sim_interface::Personality {
+                weights: vec![1000],
+            },
+        )
+        .expect("insert");
+    world
+        .insert(seeker, core_ecs::sim_interface::WorkingAge)
+        .expect("insert");
+
+    let mut market = crate::LaborMarketSystem::new(tables.clone());
+    let mut cmd = CommandBuffer::new();
+    market.run(&mut world, &ctx(), &mut cmd).expect("run");
+    let employment = world
+        .get::<Employment>(seeker)
+        .expect("get")
+        .expect("the treasury's bid clears against the cheap ask");
+    let treasury = world
+        .iter::<core_ecs::sim_interface::TreasuryBook>()
+        .expect("query")
+        .next()
+        .map(|(entity, _)| entity)
+        .expect("treasury");
+    assert_eq!(employment.employer, treasury, "hired by the treasury");
+    let wage = employment.wage_per_day;
+
+    let mut payroll = crate::PayrollSystem::new(tables);
+    payroll.run(&mut world, &ctx(), &mut cmd).expect("run");
+    assert!(
+        world.get::<Employment>(seeker).expect("get").is_some(),
+        "a public worker within `public_positions` is NOT redundant"
+    );
+    assert_eq!(
+        world
+            .get::<Wallet>(seeker)
+            .expect("get")
+            .expect("some")
+            .cash,
+        wage,
+        "paid gross — the treasury does not withhold from itself"
+    );
+    let receipts = world
+        .iter::<core_ecs::sim_interface::TreasuryBook>()
+        .expect("query")
+        .next()
+        .map(|(_, book)| *book)
+        .expect("treasury");
+    assert_eq!(receipts.income_tax_received, Money::ZERO);
+    let books = world
+        .get::<FirmBooks>(treasury)
+        .expect("get")
+        .expect("the treasury keeps payroll books");
+    assert_eq!(books.expenses, wage, "the public wage is booked");
 }

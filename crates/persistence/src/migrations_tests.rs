@@ -15,6 +15,7 @@ fn all_appended() -> Vec<&'static str> {
         .chain(V4_ADDED_COMPONENTS.iter())
         .chain(V5_ADDED_COMPONENTS.iter())
         .chain(V6_ADDED_COMPONENTS.iter())
+        .chain(V7_ADDED_COMPONENTS.iter())
         .copied()
         .collect()
 }
@@ -118,6 +119,22 @@ fn v2_bodies_migrate_to_v3_extending_event_registration() {
     grown.register::<Repriced>().unwrap();
     grown.register::<HiredEv>().unwrap();
     grown.register::<FiredEv>().unwrap();
+    macro_rules! money_event {
+        ($ty:ident, $name:literal) => {
+            #[derive(Debug, serde::Serialize, serde::Deserialize)]
+            struct $ty(u8);
+            impl core_events::Event for $ty {
+                const NAME: &'static str = $name;
+            }
+            grown.register::<$ty>().unwrap();
+        };
+    }
+    money_event!(LoanGrantedEv, "econ.loan_granted");
+    money_event!(LoanDefaultedEv, "econ.loan_defaulted");
+    money_event!(TenancyStartedEv, "econ.tenancy_started");
+    money_event!(HomeSoldEv, "econ.home_sold");
+    money_event!(HomeBuiltEv, "econ.home_built");
+    money_event!(TaxCollectedEv, "econ.tax_collected");
     grown.restore(&v3.events).unwrap();
     assert_eq!(grown.scheduled_count(), 1);
 }
@@ -222,11 +239,16 @@ fn v2_fixture_content_survives_migration_verbatim() {
     }
     let expected_events = core_events::extend_registration_bytes(
         &core_events::extend_registration_bytes(
-            &core_events::extend_registration_bytes(&original_events, &V3_ADDED_EVENTS).unwrap(),
-            &V5_ADDED_EVENTS,
+            &core_events::extend_registration_bytes(
+                &core_events::extend_registration_bytes(&original_events, &V3_ADDED_EVENTS)
+                    .unwrap(),
+                &V5_ADDED_EVENTS,
+            )
+            .unwrap(),
+            &V6_ADDED_EVENTS,
         )
         .unwrap(),
-        &V6_ADDED_EVENTS,
+        &V7_ADDED_EVENTS,
     )
     .unwrap();
     assert_eq!(
@@ -264,6 +286,7 @@ fn v3_fixture_content_survives_migration_verbatim() {
         .iter()
         .chain(V5_ADDED_COMPONENTS.iter())
         .chain(V6_ADDED_COMPONENTS.iter())
+        .chain(V7_ADDED_COMPONENTS.iter())
         .copied()
         .collect();
     assert_eq!(
@@ -277,8 +300,13 @@ fn v3_fixture_content_survives_migration_verbatim() {
     assert_eq!(
         migrated.events,
         core_events::extend_registration_bytes(
-            &core_events::extend_registration_bytes(&original_events, &V5_ADDED_EVENTS).unwrap(),
-            &V6_ADDED_EVENTS,
+            &core_events::extend_registration_bytes(
+                &core_events::extend_registration_bytes(&original_events, &V5_ADDED_EVENTS)
+                    .unwrap(),
+                &V6_ADDED_EVENTS,
+            )
+            .unwrap(),
+            &V7_ADDED_EVENTS,
         )
         .unwrap(),
         "the events blob must differ by exactly the chained registration extensions"
@@ -311,6 +339,7 @@ fn v4_fixture_content_survives_migration_verbatim() {
     let appended: Vec<&str> = V5_ADDED_COMPONENTS
         .iter()
         .chain(V6_ADDED_COMPONENTS.iter())
+        .chain(V7_ADDED_COMPONENTS.iter())
         .copied()
         .collect();
     assert_eq!(
@@ -324,8 +353,13 @@ fn v4_fixture_content_survives_migration_verbatim() {
     assert_eq!(
         migrated.events,
         core_events::extend_registration_bytes(
-            &core_events::extend_registration_bytes(&original_events, &V5_ADDED_EVENTS).unwrap(),
-            &V6_ADDED_EVENTS,
+            &core_events::extend_registration_bytes(
+                &core_events::extend_registration_bytes(&original_events, &V5_ADDED_EVENTS)
+                    .unwrap(),
+                &V6_ADDED_EVENTS,
+            )
+            .unwrap(),
+            &V7_ADDED_EVENTS,
         )
         .unwrap(),
         "the events blob must differ by exactly the chained registration extensions"
@@ -334,9 +368,9 @@ fn v4_fixture_content_survives_migration_verbatim() {
 }
 
 /// ADR 0004 §10 content-continuity proof for the committed Phase 4
-/// fixture: v5→v6 passes every field through verbatim except the
-/// three appended (empty) labor stores; the events blob differs by
-/// exactly the v6 name-list extension.
+/// fixture: v5→current passes every field through verbatim except the
+/// appended (empty) labor + money stores; the events blob differs by
+/// exactly the v6+v7 name-list extensions.
 #[test]
 fn v5_fixture_content_survives_migration_verbatim() {
     const V5_FIXTURE: &[u8] = include_bytes!(concat!(
@@ -356,18 +390,66 @@ fn v5_fixture_content_survives_migration_verbatim() {
         &migrated.components[..original_components.len()],
         &original_components
     );
+    let appended: Vec<&str> = V6_ADDED_COMPONENTS
+        .iter()
+        .chain(V7_ADDED_COMPONENTS.iter())
+        .copied()
+        .collect();
     assert_eq!(
         migrated.components.len(),
-        original_components.len() + V6_ADDED_COMPONENTS.len()
+        original_components.len() + appended.len()
     );
     for (name, bytes) in &migrated.components[original_components.len()..] {
-        assert!(V6_ADDED_COMPONENTS.contains(&name.as_str()));
+        assert!(appended.contains(&name.as_str()));
         assert_eq!(*bytes, empty_store());
     }
     assert_eq!(
         migrated.events,
-        core_events::extend_registration_bytes(&original_events, &V6_ADDED_EVENTS).unwrap(),
-        "the events blob must differ by exactly the v6 registration extension"
+        core_events::extend_registration_bytes(
+            &core_events::extend_registration_bytes(&original_events, &V6_ADDED_EVENTS).unwrap(),
+            &V7_ADDED_EVENTS,
+        )
+        .unwrap(),
+        "the events blob must differ by exactly the v6+v7 registration extensions"
+    );
+    assert_ne!(migrated.events, original_events);
+}
+
+/// ADR 0004 §10 content-continuity proof for the committed Phase 5
+/// fixture: v6→v7 passes every field through verbatim except the five
+/// appended (empty) money stores; the events blob differs by exactly
+/// the v7 name-list extension.
+#[test]
+fn v6_fixture_content_survives_migration_verbatim() {
+    const V6_FIXTURE: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/fixtures/v6_seed37_fixture30_citizens250_tick2000.embersave"
+    ));
+    let payload = &V6_FIXTURE[crate::MAGIC.len() + 4..];
+    let raw = zstd::stream::decode_all(payload).expect("fixture decompresses");
+    let v6: SaveBodyV6 = codec::from_bytes(&raw).expect("fixture decodes as v6");
+    let original_events = v6.events.clone();
+    let original_components = v6.components.clone();
+
+    let migrated = migrate_to_current(6, raw).expect("migration");
+    assert_eq!(migrated.seed, Seed::new(37));
+    assert_eq!(migrated.tick, Ticks::new(2000));
+    assert_eq!(
+        &migrated.components[..original_components.len()],
+        &original_components
+    );
+    assert_eq!(
+        migrated.components.len(),
+        original_components.len() + V7_ADDED_COMPONENTS.len()
+    );
+    for (name, bytes) in &migrated.components[original_components.len()..] {
+        assert!(V7_ADDED_COMPONENTS.contains(&name.as_str()));
+        assert_eq!(*bytes, empty_store());
+    }
+    assert_eq!(
+        migrated.events,
+        core_events::extend_registration_bytes(&original_events, &V7_ADDED_EVENTS).unwrap(),
+        "the events blob must differ by exactly the v7 registration extension"
     );
     assert_ne!(migrated.events, original_events);
 }

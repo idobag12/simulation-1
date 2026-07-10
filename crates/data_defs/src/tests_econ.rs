@@ -14,7 +14,7 @@ fn economy_validation_catches_seeded_errors() {
         "recipes.ron",
         r#"RecipesConfig(recipes: [
             RecipeDef(id: "bake", inputs: [GoodQty(good_id: "unobtanium", quantity: 1)],
-                output: GoodQty(good_id: "bread", quantity: 4), batch_hours: 1),
+                output: Some(GoodQty(good_id: "bread", quantity: 4)), batch_hours: 1),
         ])"#,
     )]);
     match load(&root) {
@@ -124,7 +124,7 @@ fn economy_validation_catches_seeded_errors() {
             r#"RecipesConfig(recipes: [
                 RecipeDef(id: "bake",
                     inputs: [GoodQty(good_id: "wheat", quantity: 2), GoodQty(good_id: "wheat", quantity: 3)],
-                    output: GoodQty(good_id: "bread", quantity: 4), batch_hours: 1),
+                    output: Some(GoodQty(good_id: "bread", quantity: 4)), batch_hours: 1),
             ])"#,
         ),
     ]);

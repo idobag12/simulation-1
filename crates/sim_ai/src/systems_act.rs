@@ -242,7 +242,7 @@ impl System for ActSystem {
                     world.remove::<CurrentAction>(entity)?;
                 }
                 Transition::Purchase { at } => {
-                    execute_purchase(world, entity, at)?;
+                    execute_purchase(world, entity, at, self.tables.sales_tax_per_mille)?;
                 }
             }
         }
@@ -257,7 +257,12 @@ impl System for ActSystem {
 /// transferred. On success, wallets, the seller's books and stock, the
 /// conservation counters, the buyer's need, and the event all move in
 /// this one call.
-fn execute_purchase(world: &mut World, buyer: Entity, seller: Entity) -> Result<(), EcsError> {
+fn execute_purchase(
+    world: &mut World,
+    buyer: Entity,
+    seller: Entity,
+    sales_tax_per_mille: i64,
+) -> Result<(), EcsError> {
     let offer = match world.get::<RetailOffer>(seller)? {
         Some(offer) => *offer,
         None => {
@@ -296,6 +301,20 @@ fn execute_purchase(world: &mut World, buyer: Entity, seller: Entity) -> Result<
         ))
     };
 
+    // Sales tax (Phase 6, ADR 0009 §4): split out of the posted price at
+    // the till — the buyer pays the posted price, the seller keeps the
+    // net, the treasury takes the tax, all in this one atomic call.
+    // Worlds without a treasury (migrated) tax nothing, honestly.
+    let treasury = world
+        .iter::<core_ecs::sim_interface::TreasuryBook>()?
+        .next()
+        .map(|(entity, _)| entity);
+    let tax = match treasury {
+        Some(_) => core_types::Money::from_mills(price.mills() * sales_tax_per_mille / 1000),
+        None => core_types::Money::ZERO,
+    };
+    let net = price.try_sub(tax)?;
+
     // The atomic transaction (ADR 0007 §§4, 8b): every leg structurally
     // required — a missing component is a typed error at the fault site,
     // never a silently skipped half-transfer. Money…
@@ -306,11 +325,31 @@ fn execute_purchase(world: &mut World, buyer: Entity, seller: Entity) -> Result<
     let wallet = world
         .get_mut::<Wallet>(seller)?
         .ok_or_else(|| missing("seller wallet", seller))?;
-    wallet.cash = wallet.cash.try_add(price)?;
+    wallet.cash = wallet.cash.try_add(net)?;
     let books = world
         .get_mut::<FirmBooks>(seller)?
         .ok_or_else(|| missing("seller books", seller))?;
-    books.revenue = books.revenue.try_add(price)?;
+    books.revenue = books.revenue.try_add(net)?;
+    if let Some(treasury) = treasury
+        && tax > core_types::Money::ZERO
+    {
+        let wallet = world
+            .get_mut::<Wallet>(treasury)?
+            .ok_or_else(|| missing("treasury wallet", treasury))?;
+        wallet.cash = wallet.cash.try_add(tax)?;
+        let books = world
+            .get_mut::<FirmBooks>(treasury)?
+            .ok_or_else(|| missing("treasury books", treasury))?;
+        books.revenue = books.revenue.try_add(tax)?;
+        if let Some(book) = world.get_mut::<core_ecs::sim_interface::TreasuryBook>(treasury)? {
+            book.sales_tax_received = book.sales_tax_received.try_add(tax)?;
+        }
+        world.emit(&core_ecs::sim_interface::TaxCollected {
+            payer: buyer,
+            amount: tax,
+            kind: core_ecs::sim_interface::TaxKind::Sales,
+        })?;
+    }
     // …goods (one unit off the shelf, counted as citizen consumption)…
     let stock = world
         .get_mut::<Inventory>(seller)?

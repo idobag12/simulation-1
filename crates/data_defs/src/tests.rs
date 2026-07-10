@@ -38,12 +38,13 @@ const GOOD_LOCATIONS: &str = r#"LocationsConfig(kinds: [
             SatisfierDef(need_id: "hunger", per_tick: 9000),
         ]),
         LocationKindDef(id: "shop", is_home: false, count: 0, satisfies: []),
+        LocationKindDef(id: "town_hall", is_home: false, count: 0, satisfies: []),
     ])"#;
 const GOOD_GOODS: &str = r#"GoodsConfig(goods: [
         GoodDef(id: "bread", spoil_per_mille: 100),
     ])"#;
 const GOOD_RECIPES: &str = r#"RecipesConfig(recipes: [
-        RecipeDef(id: "bake", inputs: [], output: GoodQty(good_id: "bread", quantity: 4), batch_hours: 1),
+        RecipeDef(id: "bake", inputs: [], output: Some(GoodQty(good_id: "bread", quantity: 4)), batch_hours: 1),
     ])"#;
 const GOOD_FIRMS: &str = r#"FirmsConfig(kinds: [
         FirmDef(id: "bakery", count: 1, recipe_id: "bake", initial_cash_mills: 1000,
@@ -51,6 +52,26 @@ const GOOD_FIRMS: &str = r#"FirmsConfig(kinds: [
             location_kind_id: "shop", positions: 2, min_workers: 1,
             retail: Some(RetailDef(need_id: "hunger", gain_per_unit: 100000, use_ticks: 5))),
     ])"#;
+const GOOD_BANK: &str = r#"BankConfig(
+        equity_seed_mills: 100000, target_cash_float_mills: 2000,
+        deposit_spread_per_million_daily: 400, loan_payroll_multiple_per_mille: 5000,
+        working_capital_floor_days: 3, serviceability_revenue_per_mille: 200,
+        risk_premium_per_million_daily: 400, default_cooldown_days: 30,
+        repay_term_days: 60, policy_neutral_per_million_daily: 800,
+        policy_target_inflation_per_mille: 0, policy_sensitivity_per_million: 50,
+        policy_min_per_million_daily: 100, policy_max_per_million_daily: 5000,
+        index_period_days: 5,
+    )"#;
+const GOOD_HOUSING: &str = r#"HousingConfig(
+        upkeep_mills_per_day: 40, rent_margin_per_mille: 250, rent_bid_per_mille: 8,
+        purchase_period_days: 10, home_price_mills: 30000, buyer_savings_per_mille: 300,
+        mortgage_ltv_per_mille: 700, construction_margin_per_mille: 300,
+    )"#;
+const GOOD_TAXES: &str = r#"TaxesConfig(
+        income_per_mille: 100, sales_per_mille: 50, treasury_seed_mills: 50000,
+        public_positions: 2, public_wage_bid_mills: 200,
+        public_location_kind_id: "town_hall",
+    )"#;
 const GOOD_LABOR: &str = r#"LaborConfig(
         shift_start_hour: 9, shift_end_hour: 17, min_working_age_years: 16,
         reservation_base_mills: 150, reservation_wealth_per_mille: 300,
@@ -100,6 +121,9 @@ pub(crate) fn write_tree(overrides: &[(&str, &str)]) -> PathBuf {
         ("firms.ron", GOOD_FIRMS),
         ("balance/economy.ron", GOOD_ECONOMY),
         ("balance/labor.ron", GOOD_LABOR),
+        ("balance/bank.ron", GOOD_BANK),
+        ("balance/housing.ron", GOOD_HOUSING),
+        ("balance/taxes.ron", GOOD_TAXES),
     ];
     for (rel, content) in base {
         let path = root.join(rel);
@@ -125,7 +149,7 @@ fn valid_data_loads() {
     assert_eq!(defs.people.needs.needs.len(), 1);
     assert_eq!(defs.people.mortality.per_day_chance(61), 5_000_000);
     let tables = resolve_ai(&defs);
-    assert_eq!(tables.kind_is_home, vec![true, false, false]);
+    assert_eq!(tables.kind_is_home, vec![true, false, false, false]);
     assert_eq!(tables.kind_satisfiers[1], vec![(0, 9000)]);
     assert_eq!(tables.rest_need, 0);
     assert_eq!(tables.need_trait[0], Some((0, 500)));
@@ -136,8 +160,7 @@ fn valid_data_loads() {
     assert_eq!(econ.goods, 1);
     assert_eq!(econ.spoil_per_mille, vec![100]);
     assert_eq!(econ.recipes.len(), 1);
-    assert_eq!(econ.recipes[0].output_good, 0);
-    assert_eq!(econ.recipes[0].output_quantity, 4);
+    assert_eq!(econ.recipes[0].output, Some((0, 4)));
     let bakery = &econ.firm_kinds[0];
     assert_eq!(bakery.initial_inventory, vec![8]);
     assert_eq!(bakery.initial_cash.mills(), 1000);

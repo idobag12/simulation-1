@@ -86,21 +86,40 @@ impl System for ProductionSystem {
                             },
                         )?;
                     } else {
-                        // Batch complete: outputs land, produced counts.
+                        // Batch complete: outputs land, produced counts —
+                        // or, for a construction batch, a new home is
+                        // born, owned by its builder (ADR 0009 §5).
                         world.remove::<Production>(entity)?;
-                        adjust_stock(world, entity, recipe.output_good, recipe.output_quantity)?;
-                        count(
-                            world,
-                            ledger,
-                            recipe.output_good,
-                            recipe.output_quantity,
-                            |c| &mut c.produced,
-                        )?;
+                        match recipe.output {
+                            Some((good, quantity)) => {
+                                adjust_stock(world, entity, good, quantity)?;
+                                count(world, ledger, good, quantity, |c| &mut c.produced)?;
+                            }
+                            None => {
+                                let home = world.spawn();
+                                world.insert(
+                                    home,
+                                    core_ecs::sim_interface::Location {
+                                        kind: self.tables.money.home_location_kind,
+                                    },
+                                )?;
+                                world.insert(
+                                    home,
+                                    core_ecs::sim_interface::Ownership { owner: entity },
+                                )?;
+                                world.emit(&core_ecs::sim_interface::HomeBuilt {
+                                    builder: entity,
+                                    home,
+                                })?;
+                            }
+                        }
                     }
                 }
                 None => {
                     // Start a batch if the shift is staffed and every
-                    // input is in stock.
+                    // input is in stock — and, for construction, only
+                    // when the sale price covers materials + financing ×
+                    // margin (ADR 0009 §5: the policy rate's teeth).
                     let min_workers = self
                         .tables
                         .firm_kinds
@@ -108,6 +127,16 @@ impl System for ProductionSystem {
                         .map(|kind| kind.min_workers)
                         .unwrap_or(u32::MAX);
                     if present.get(&entity.index()).copied().unwrap_or(0) < min_workers {
+                        continue;
+                    }
+                    if recipe.builds_home
+                        && !crate::construction::construction_pays(
+                            world,
+                            &self.tables,
+                            entity,
+                            &recipe,
+                        )?
+                    {
                         continue;
                     }
                     let can_start = {
@@ -176,6 +205,22 @@ impl System for TradeSystem {
             .map(|(entity, firm)| (entity, firm.recipe))
             .collect();
 
+        // Committed daily obligations per firm (entity-index keyed):
+        // wages owed at payroll plus tomorrow's debt service. Committed
+        // money is not free cash (the Phase 5 labor-bid lesson) — a
+        // borrower that spends its whole wallet on inputs defaults on a
+        // payment it could easily afford.
+        let mut committed: std::collections::BTreeMap<u32, i64> = std::collections::BTreeMap::new();
+        for (_, employment) in world.iter::<Employment>()? {
+            *committed.entry(employment.employer.index()).or_insert(0) +=
+                employment.wage_per_day.mills();
+        }
+        for (_, book) in world.iter::<core_ecs::sim_interface::BankBook>()? {
+            for loan in &book.loans {
+                *committed.entry(loan.borrower.index()).or_insert(0) += loan.day_payment.mills();
+            }
+        }
+
         for (buyer, recipe_index) in &firms {
             let recipe = self
                 .tables
@@ -210,7 +255,7 @@ impl System for TradeSystem {
                     else {
                         continue;
                     };
-                    if seller_recipe.output_good != *good {
+                    if seller_recipe.output.map(|(output, _)| output) != Some(*good) {
                         continue;
                     }
                     let stock = world
@@ -232,11 +277,14 @@ impl System for TradeSystem {
                     continue;
                 };
 
-                // Quantity: bounded by deficit, stock, and the buyer's cash.
+                // Quantity: bounded by deficit, stock, and the buyer's
+                // UNCOMMITTED cash (wallet minus wages + debt service).
                 let cash = world
                     .get::<Wallet>(*buyer)?
                     .map(|wallet| wallet.cash.mills())
-                    .unwrap_or(0);
+                    .unwrap_or(0)
+                    .saturating_sub(committed.get(&buyer.index()).copied().unwrap_or(0))
+                    .max(0);
                 let affordable = if price.mills() > 0 {
                     cash / price.mills()
                 } else {
@@ -289,6 +337,9 @@ impl PricingSystem {
         recipe: &crate::config::RecipeTable,
         market: &[i64],
     ) -> Result<i64, EcsError> {
+        let Some((_, output_quantity)) = recipe.output else {
+            return Ok(0); // construction: the home price is data, not cost-plus
+        };
         let mut batch_cost = self.tables.economy.overhead_mills_per_batch;
         for (good, quantity) in &recipe.inputs {
             let unit = market.get(*good as usize).copied().unwrap_or(0);
@@ -307,11 +358,7 @@ impl PricingSystem {
             1000,
             "pricing markup ceil",
         )?;
-        div_ceil(
-            marked_up,
-            recipe.output_quantity.max(1),
-            "pricing unit ceil",
-        )
+        div_ceil(marked_up, output_quantity.max(1), "pricing unit ceil")
     }
 }
 
@@ -336,15 +383,18 @@ impl System for PricingSystem {
             let Some(recipe) = self.tables.recipes.get(firm.recipe as usize) else {
                 continue;
             };
+            let Some((output_good, _)) = recipe.output else {
+                continue; // builders don't post goods prices (ADR 0009 §5)
+            };
             let posted = firm.posted_price.mills();
-            if let Some(entry) = market.get_mut(recipe.output_good as usize)
+            if let Some(entry) = market.get_mut(output_good as usize)
                 && (*entry == 0 || posted < *entry)
             {
                 *entry = posted;
             }
             let stock = world
                 .get::<Inventory>(entity)?
-                .map(|inventory| inventory.stock(recipe.output_good))
+                .map(|inventory| inventory.stock(output_good))
                 .unwrap_or(0);
             firms.push((entity, firm.recipe, posted, stock));
         }
@@ -354,9 +404,12 @@ impl System for PricingSystem {
             let Some(recipe) = self.tables.recipes.get(recipe_index as usize).cloned() else {
                 continue;
             };
+            let Some((output_good, output_quantity)) = recipe.output else {
+                continue;
+            };
             let floor = self.floor_price(&recipe, &market)?;
             let target = mul(
-                recipe.output_quantity,
+                output_quantity,
                 self.tables.economy.inventory_target_batches,
                 "pricing target",
             )?;
@@ -386,7 +439,7 @@ impl System for PricingSystem {
                 }
                 world.emit(&PriceChanged {
                     firm: entity,
-                    good: recipe.output_good,
+                    good: output_good,
                     old: Money::from_mills(posted),
                     new: Money::from_mills(new),
                 })?;

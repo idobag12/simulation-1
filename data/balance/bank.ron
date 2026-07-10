@@ -1,0 +1,26 @@
+// The bank (SPEC §12; ADR 0009 §2). Rates are per-million per DAY
+// (the calendar year is 120 days; annual quotes would mislead).
+BankConfig(
+    equity_seed_mills: 500000,
+    // Citizens keep this much cash on hand; the rest sits in the vault.
+    target_cash_float_mills: 5000,
+    // Deposit rate = policy − spread (floored at 0).
+    deposit_spread_per_million_daily: 400,
+    // Working-capital loans: 5× daily payroll, requested below 3 days
+    // of cover, granted when 20% of lifetime revenue covers the full
+    // obligation (term × day payment — the rate prices in).
+    loan_payroll_multiple_per_mille: 5000,
+    working_capital_floor_days: 3,
+    serviceability_revenue_per_mille: 200,
+    risk_premium_per_million_daily: 400,
+    default_cooldown_days: 30,
+    repay_term_days: 60,
+    // Taylor rule: neutral ~0.08%/day; respond 50 per-million per
+    // per-mille of inflation gap, within [100, 5000].
+    policy_neutral_per_million_daily: 800,
+    policy_target_inflation_per_mille: 0,
+    policy_sensitivity_per_million: 50,
+    policy_min_per_million_daily: 100,
+    policy_max_per_million_daily: 5000,
+    index_period_days: 5,
+)

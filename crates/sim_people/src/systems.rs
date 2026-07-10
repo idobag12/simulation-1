@@ -2,7 +2,9 @@
 //! (day rate). Explicit order and rates are wired by the application's
 //! schedule builder (SPEC §6).
 
-use core_ecs::sim_interface::{EconCounters, Wallet, WorkingAge};
+use core_ecs::sim_interface::{
+    BankBook, EconCounters, Ownership, TreasuryBook, Wallet, WorkingAge,
+};
 use core_ecs::{CommandBuffer, EcsError, Entity, System, TickContext, World};
 use core_rng::RngCore;
 use core_types::Money;
@@ -245,6 +247,48 @@ fn settle_death(w: &mut World, entity: Entity, household: Option<Entity>) -> Res
             if let Some(wallet) = w.get_mut::<Wallet>(entity)? {
                 wallet.cash = Money::ZERO;
             }
+        }
+    }
+
+    // Phase 6 estate legs (ADR 0009 §3): the deceased's deposit row and
+    // owned homes pass to the heir — or to the treasury (public housing /
+    // unclaimed funds) when the household died out.
+    let treasury = w.iter::<TreasuryBook>()?.next().map(|(entity, _)| entity);
+    if let Some((bank, _)) = w.iter::<BankBook>()?.next()
+        && let Some(recipient) = heir.or(treasury)
+        && let Some(book) = w.get_mut::<BankBook>(bank)?
+    {
+        let balance = book
+            .deposits
+            .iter()
+            .position(|(owner, _)| *owner == entity)
+            .map(|index| book.deposits.remove(index).1);
+        if let Some(balance) = balance
+            && balance > Money::ZERO
+        {
+            match book
+                .deposits
+                .iter_mut()
+                .find(|(owner, _)| *owner == recipient)
+            {
+                Some(row) => row.1 = row.1.try_add(balance)?,
+                None => {
+                    book.deposits.push((recipient, balance));
+                    book.deposits.sort_by_key(|(owner, _)| owner.index());
+                }
+            }
+        }
+    }
+    let owned_homes: Vec<Entity> = w
+        .iter::<Ownership>()?
+        .filter(|(_, ownership)| ownership.owner == entity)
+        .map(|(home, _)| home)
+        .collect();
+    for home in owned_homes {
+        if let Some(recipient) = heir.or(treasury)
+            && let Some(ownership) = w.get_mut::<Ownership>(home)?
+        {
+            ownership.owner = recipient;
         }
     }
     Ok(())

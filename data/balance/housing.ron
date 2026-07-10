@@ -1,0 +1,15 @@
+// Housing (SPEC §12; ADR 0009 §§3, 5).
+HousingConfig(
+    // Landlord cost basis and margin: rent asks start near 50 mills/day.
+    upkeep_mills_per_day: 40,
+    rent_margin_per_mille: 250,
+    // A homeless bidder offers 0.8% of their cash as daily rent.
+    rent_bid_per_mille: 8,
+    purchase_period_days: 10,
+    home_price_mills: 30000,
+    // A buyer needs 30% of the price in savings; mortgages cover 70%.
+    buyer_savings_per_mille: 300,
+    mortgage_ltv_per_mille: 700,
+    // Builders start homes when the price clears cost + financing by 30%.
+    construction_margin_per_mille: 300,
+)

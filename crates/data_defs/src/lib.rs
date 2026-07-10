@@ -95,6 +95,12 @@ pub struct DataDefs {
     pub economy: sim_economy::config::EconomyConfig,
     /// Labor-market tunables (Phase 5, ADR 0008 §7).
     pub labor: sim_economy::config::LaborConfig,
+    /// Bank tunables (Phase 6, ADR 0009 §7).
+    pub bank: sim_economy::BankConfig,
+    /// Housing tunables (Phase 6, ADR 0009 §7).
+    pub housing: sim_economy::HousingConfig,
+    /// Taxes and the public employer (Phase 6, ADR 0009 §7).
+    pub taxes: sim_economy::TaxesConfig,
 }
 
 /// Loads and validates every data definition from a `data/` directory
@@ -120,6 +126,9 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
     let economy: sim_economy::config::EconomyConfig =
         load_ron(&data_root.join("balance/economy.ron"))?;
     let labor: sim_economy::config::LaborConfig = load_ron(&data_root.join("balance/labor.ron"))?;
+    let bank: sim_economy::BankConfig = load_ron(&data_root.join("balance/bank.ron"))?;
+    let housing: sim_economy::HousingConfig = load_ron(&data_root.join("balance/housing.ron"))?;
+    let taxes: sim_economy::TaxesConfig = load_ron(&data_root.join("balance/taxes.ron"))?;
     validate(data_root, &calendar, &engine)?;
     validate_people(data_root, &calendar, &people)?;
     validate_locations(data_root, &locations, &people)?;
@@ -128,6 +137,7 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
         data_root, &goods, &recipes, &firms, &economy, &people, &locations,
     )?;
     validate_labor(data_root, &labor, &people)?;
+    validate_money(data_root, &bank, &housing, &taxes, &locations)?;
     Ok(DataDefs {
         calendar,
         engine,
@@ -139,6 +149,9 @@ pub fn load(data_root: &Path) -> Result<DataDefs, DataError> {
         firms,
         economy,
         labor,
+        bank,
+        housing,
+        taxes,
     })
 }
 
@@ -158,7 +171,7 @@ mod validate;
 mod validate_econ;
 pub use resolve::{resolve_ai, resolve_economy};
 use validate::{validate, validate_ai, validate_locations, validate_people};
-use validate_econ::{validate_economy, validate_labor};
+use validate_econ::{validate_economy, validate_labor, validate_money};
 
 #[cfg(test)]
 #[path = "tests.rs"]

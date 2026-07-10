@@ -32,4 +32,9 @@ FirmsConfig(kinds: [
             initial_price_mills: 130,
             location_kind_id: "woodyard", positions: 4, min_workers: 1,
             retail: Some(RetailDef(need_id: "shelter", gain_per_unit: 500000, use_ticks: 20))),
+    FirmDef(id: "builder", count: 1, recipe_id: "build_home",
+            initial_cash_mills: 90000,
+            initial_inventory: [GoodQty(good_id: "timber", quantity: 30)],
+            initial_price_mills: 30000,
+            location_kind_id: "builder_yard", positions: 4, min_workers: 2, retail: None),
 ])

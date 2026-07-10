@@ -24,7 +24,9 @@ fn total_positions(defs: &data_defs::DataDefs) -> u32 {
         .kinds
         .iter()
         .map(|kind| kind.positions * kind.count)
-        .sum()
+        .sum::<u32>()
+        // The treasury's public slots (Phase 6, ADR 0009 §4).
+        + defs.taxes.public_positions
 }
 
 /// Exit criterion 1a — the market clears with excess workers: every slot
@@ -49,9 +51,20 @@ fn labor_market_clears_when_workers_outnumber_positions() {
         stats.employed, positions,
         "every slot fills when bids cover the cheapest asks"
     );
-    assert_eq!(
-        stats.unmatched, stats.seeking,
-        "with all slots taken, that clearing's seekers stay (measured) unmatched"
+    // Phase 6 churn (insolvency firings, reopened slots) means a few of
+    // the day's seekers can be hired into freshly vacated slots; the
+    // clearing proof is `employed == positions` above. What must hold:
+    // the surplus is MEASURED — seekers beyond the reopened slots stay
+    // unmatched, never silently assigned.
+    assert!(
+        stats.unmatched > 0 && stats.seeking >= stats.unmatched,
+        "the surplus seekers are measured as unmatched (seeking {}, unmatched {})",
+        stats.seeking,
+        stats.unmatched
+    );
+    assert!(
+        stats.seeking - stats.unmatched <= positions,
+        "hires in one clearing never exceed the town's slot count"
     );
     assert!(stats.hires >= u64::from(positions));
 }
@@ -211,14 +224,29 @@ fn wages_flow_from_firms_to_workers() {
 
     let world = sim.world();
     let seeded_max = defs.people.demographics.wealth_max_mills;
+    // Wealth = wallet + vault row (Phase 6): the float keeps wallets
+    // small while earnings accumulate in the bank.
+    let vault: std::collections::BTreeMap<u32, i64> = world
+        .iter::<core_ecs::sim_interface::BankBook>()
+        .expect("query")
+        .next()
+        .map(|(_, book)| {
+            book.deposits
+                .iter()
+                .map(|(owner, balance)| (owner.index(), balance.mills()))
+                .collect()
+        })
+        .unwrap_or_default();
     let earners = world
         .iter::<Employment>()
         .expect("query")
         .filter(|(citizen, _)| {
-            world
+            let cash = world
                 .get::<Wallet>(*citizen)
                 .expect("query")
-                .is_some_and(|wallet| wallet.cash.mills() > seeded_max)
+                .map(|wallet| wallet.cash.mills())
+                .unwrap_or(0);
+            cash + vault.get(&citizen.index()).copied().unwrap_or(0) > seeded_max
         })
         .count();
     assert!(

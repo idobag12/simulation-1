@@ -6,7 +6,7 @@
 //! must ship a migration that makes it pass again. Regenerating a fixture
 //! to make a red test green is forbidden without that migration.
 //!
-//! These suites load the FROZEN data snapshot (`fixtures/data_v6/`), never
+//! These suites load the FROZEN data snapshot (`fixtures/data_v7/`), never
 //! the live `data/` directory, so balance edits cannot shift the goldens.
 //!
 //! Golden-hash policy (ADR 0004 §10): when a phase legitimately extends
@@ -17,10 +17,11 @@
 //! joined the hash), Phase 2 (+people registrations, format v3 —
 //! ADR 0005 §9), Phase 3 (+world/AI registrations, format v4 —
 //! ADR 0006 §8), Phase 4 (+economy registrations and events, format v5 —
-//! ADR 0007 §9), and Phase 5 (+labor registrations and events, format
-//! v6 — ADR 0008 §8; the pinned snapshot moved to `data_v6`, whose
-//! balance and schedule changed this phase, so resume trajectories moved
-//! with it).
+//! ADR 0007 §9), Phase 5 (+labor registrations and events, format v6 —
+//! ADR 0008 §8), and Phase 6 (+money registrations and events, format
+//! v7 — ADR 0009 §6; the pinned snapshot moved to `data_v7`, whose
+//! recipes/firms/locations, balance files, and day schedule changed
+//! this phase, so resume trajectories moved with it).
 
 use core_types::{Seed, Ticks, WorldHash};
 use embervale_tests::pinned_defs;
@@ -41,12 +42,12 @@ fn fixture_schedule() -> core_ecs::Schedule {
 /// Committed v1 fixture: seed 7, 50 fixture entities, 1,000 ticks (Phase 0).
 const V1_FIXTURE: &[u8] = include_bytes!("../fixtures/v1_seed7_fixture50_tick1000.embersave");
 
-/// Golden hash of the migrated v1 fixture at load (re-recorded Phase 5:
-/// registration grew, ADR 0008 §8).
-const V1_GOLDEN_HASH_AT_LOAD: u64 = 0x0a46_dbb4_c328_1de9;
+/// Golden hash of the migrated v1 fixture at load (re-recorded Phase 6:
+/// registration grew, ADR 0009 §6).
+const V1_GOLDEN_HASH_AT_LOAD: u64 = 0x30f7_afa4_148b_72bf;
 
 /// Golden hash after resuming the migrated v1 world 100 ticks.
-const V1_GOLDEN_HASH_AFTER_100: u64 = 0x271f_25fd_6d27_592c;
+const V1_GOLDEN_HASH_AFTER_100: u64 = 0x0ade_9956_b304_9d48;
 
 #[test]
 fn v1_golden_save_loads_through_migration_to_the_golden_state() {
@@ -86,11 +87,11 @@ fn v1_golden_save_resumes_deterministically() {
 /// scheduled alarms.
 const V2_FIXTURE: &[u8] = include_bytes!("../fixtures/v2_seed13_fixture60_tick2000.embersave");
 
-/// Golden hash of the migrated v2 fixture at load (re-recorded Phase 5).
-const V2_GOLDEN_HASH_AT_LOAD: u64 = 0x1e86_808c_bd92_ca8c;
+/// Golden hash of the migrated v2 fixture at load (re-recorded Phase 6).
+const V2_GOLDEN_HASH_AT_LOAD: u64 = 0x9afc_94d3_324f_161a;
 
 /// Golden hash after resuming the migrated v2 fixture 100 ticks.
-const V2_GOLDEN_HASH_AFTER_100: u64 = 0x9a68_c423_c2ed_a11b;
+const V2_GOLDEN_HASH_AFTER_100: u64 = 0x1be8_0fe9_d4a2_ed99;
 
 #[test]
 fn v2_golden_save_loads_through_migration_to_the_golden_state() {
@@ -130,8 +131,8 @@ fn v2_golden_save_resumes_deterministically() {
 const V3_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v3_seed17_fixture40_citizens300_tick3000.embersave");
 
-/// Golden hash of the migrated v3 fixture at load (re-recorded Phase 5).
-const V3_GOLDEN_HASH_AT_LOAD: u64 = 0x4ed6_e2fa_58e1_db0f;
+/// Golden hash of the migrated v3 fixture at load (re-recorded Phase 6).
+const V3_GOLDEN_HASH_AT_LOAD: u64 = 0xa330_b96b_c9ab_ad70;
 
 /// Golden hash after resuming the migrated v3 fixture 1,500 ticks
 /// (crossing a day boundary so mortality and needs decay both run again;
@@ -139,7 +140,7 @@ const V3_GOLDEN_HASH_AT_LOAD: u64 = 0x4ed6_e2fa_58e1_db0f;
 /// town has no places, so its citizens idle, honestly and deterministically;
 /// the Phase 4 economy systems no-op over its empty stores and the auditor
 /// honestly reports nothing to audit).
-const V3_GOLDEN_HASH_AFTER_1500: u64 = 0x3618_610f_1e86_3bfe;
+const V3_GOLDEN_HASH_AFTER_1500: u64 = 0x0dab_92a4_50da_921e;
 
 #[test]
 fn v3_golden_save_loads_to_the_exact_golden_state() {
@@ -182,14 +183,14 @@ fn v3_golden_save_resumes_deterministically() {
 const V4_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v4_seed23_fixture30_citizens250_tick2500.embersave");
 
-/// Golden hash of the v4 fixture at load (re-recorded Phase 5).
-const V4_GOLDEN_HASH_AT_LOAD: u64 = 0x00fc_311c_079c_2748;
+/// Golden hash of the v4 fixture at load (re-recorded Phase 6).
+const V4_GOLDEN_HASH_AT_LOAD: u64 = 0x534d_570f_d7a4_294f;
 
 /// Golden hash after resuming the v4 fixture 700 ticks (mid-flight
 /// actions complete, new decisions land, needs decay and satisfy — under
 /// the v5 data snapshot, whose satisfiers changed; a migrated pre-economy
 /// town has no wallets or shops, so nobody buys anything, honestly).
-const V4_GOLDEN_HASH_AFTER_700: u64 = 0x07a8_e91f_f548_936d;
+const V4_GOLDEN_HASH_AFTER_700: u64 = 0xe501_b4c9_a748_6652;
 
 #[test]
 fn v4_golden_save_loads_to_the_exact_golden_state() {
@@ -238,17 +239,17 @@ fn v4_golden_save_resumes_deterministically() {
 const V5_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v5_seed29_fixture30_citizens250_tick2600.embersave");
 
-/// Golden hash of the v5 fixture at load (re-recorded Phase 5: the
+/// Golden hash of the v5 fixture at load (re-recorded Phase 6; the
 /// migrated v5 town has no working-age markers or labor stats until its
 /// first day boundary — nobody is hired out of thin air; the promotion
 /// stamps real adults, the ledger grows its stats row, and the market
 /// hires — proven semantically by
 /// `v5_migrated_economy_catches_up_with_the_labor_market`).
-const V5_GOLDEN_HASH_AT_LOAD: u64 = 0x6eae_4ca1_1152_2c40;
+const V5_GOLDEN_HASH_AT_LOAD: u64 = 0x1891_d504_a60f_4490;
 
 /// Golden hash after resuming the v5 fixture 700 ticks (purchases,
 /// trades, repricing, and the daily audit all run again).
-const V5_GOLDEN_HASH_AFTER_700: u64 = 0x62cd_cec9_317f_48a8;
+const V5_GOLDEN_HASH_AFTER_700: u64 = 0x0020_4480_6de0_6370;
 
 #[test]
 fn v5_golden_save_loads_to_the_exact_golden_state() {
@@ -374,12 +375,15 @@ fn v5_golden_save_resumes_deterministically() {
 const V6_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v6_seed37_fixture30_citizens250_tick2000.embersave");
 
-/// Golden hash of the v6 fixture at load.
-const V6_GOLDEN_HASH_AT_LOAD: u64 = 0x9403_5b14_3968_183b;
+/// Golden hash of the v6 fixture at load (re-recorded Phase 6:
+/// registration grew, ADR 0009 §6).
+const V6_GOLDEN_HASH_AT_LOAD: u64 = 0x133d_68b8_6a10_384b;
 
 /// Golden hash after resuming the v6 fixture 1,000 ticks (the rest of
-/// the shift, then the 2,880 day boundary's audit/payroll/clearing).
-const V6_GOLDEN_HASH_AFTER_1000: u64 = 0xbf85_c4a8_de2d_a534;
+/// the shift, then the 2,880 day boundary's audit/payroll/clearing —
+/// under the Phase 6 day schedule the money systems also run; a
+/// migrated town has no bank or treasury, so they no-op, honestly).
+const V6_GOLDEN_HASH_AFTER_1000: u64 = 0x40bf_4866_5912_3fc6;
 
 #[test]
 fn v6_golden_save_loads_to_the_exact_golden_state() {
@@ -443,6 +447,88 @@ fn v6_golden_save_resumes_deterministically() {
     assert_eq!(
         sim.state_hash().expect("hash failed"),
         WorldHash::new(V6_GOLDEN_HASH_AFTER_1000),
+        "resumed evolution diverged from the recording"
+    );
+}
+
+// --- v7 (Phase 6: money — the bank, taxes, treasury, housing) -----------
+
+/// Committed v7 fixture: seed 41, 30 fixture entities + 250 citizens +
+/// the full money layer, 29,360 ticks — 09:20 on day 20, MID-SHIFT and
+/// mid-loan: deposit rows populated, working-capital loans outstanding,
+/// income and sales tax collected, the policy rate moved off neutral.
+const V7_FIXTURE: &[u8] =
+    include_bytes!("../fixtures/v7_seed41_fixture30_citizens250_tick29360.embersave");
+
+/// Golden hash of the v7 fixture at load.
+const V7_GOLDEN_HASH_AT_LOAD: u64 = 0xda77_bab5_f2f4_e23d;
+
+/// Golden hash after resuming the v7 fixture 1,000 ticks (the rest of
+/// the shift, then the day boundary's audit, bank service/origination,
+/// payroll withholding, clearings, and markets).
+const V7_GOLDEN_HASH_AFTER_1000: u64 = 0x37df_ca3f_94f0_3665;
+
+#[test]
+fn v7_golden_save_loads_to_the_exact_golden_state() {
+    let sim = persistence::load_from_bytes(V7_FIXTURE, load_config(), runner::register_world)
+        .expect("committed v7 save no longer loads: save-format break without a migration");
+    assert_eq!(sim.tick(), Ticks::new(29360));
+    assert_eq!(sim.seed(), Seed::new(41));
+    // The fixture was saved with a LIVE money layer: savings in the
+    // vault, credit outstanding, both taxes collected — so the golden
+    // genuinely covers (de)serialization of every Phase 6 store.
+    let world = sim.world();
+    let book = world
+        .iter::<core_ecs::sim_interface::BankBook>()
+        .expect("query")
+        .next()
+        .map(|(_, book)| book.clone())
+        .expect("the v7 fixture has a bank");
+    assert!(!book.deposits.is_empty(), "citizens hold deposits");
+    assert!(
+        !book.loans.is_empty(),
+        "working-capital loans are in flight"
+    );
+    let treasury = world
+        .iter::<core_ecs::sim_interface::TreasuryBook>()
+        .expect("query")
+        .next()
+        .map(|(_, book)| *book)
+        .expect("the v7 fixture has a treasury");
+    assert!(treasury.income_tax_received.mills() > 0);
+    assert!(treasury.sales_tax_received.mills() > 0);
+    assert!(
+        world
+            .iter::<core_ecs::sim_interface::Ownership>()
+            .expect("query")
+            .count()
+            > 0,
+        "genesis homes are owned"
+    );
+    assert!(
+        debug_tools::audit_economy(world).expect("audit"),
+        "the loaded fixture must satisfy every conservation identity,
+         bank vault and treasury included"
+    );
+    assert_eq!(
+        sim.state_hash().expect("hash failed"),
+        WorldHash::new(V7_GOLDEN_HASH_AT_LOAD),
+        "loaded v7 state differs from the state that was saved"
+    );
+}
+
+#[test]
+fn v7_golden_save_resumes_deterministically() {
+    let mut sim = persistence::load_from_bytes(V7_FIXTURE, load_config(), runner::register_world)
+        .expect("committed v7 save no longer loads");
+    let derived = runner::derive_spec_from_world(sim.world()).expect("derive");
+    assert!(derived.fixture);
+    assert!(derived.economy);
+    let mut schedule = runner::build_schedule(&derived, &pinned_defs());
+    sim.run_ticks(&mut schedule, 1000).expect("resume failed");
+    assert_eq!(
+        sim.state_hash().expect("hash failed"),
+        WorldHash::new(V7_GOLDEN_HASH_AFTER_1000),
         "resumed evolution diverged from the recording"
     );
 }

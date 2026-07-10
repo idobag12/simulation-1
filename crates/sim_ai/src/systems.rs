@@ -30,6 +30,9 @@ struct Decider {
     home: Option<Entity>,
     asleep_window: bool,
     cash_mills: i64,
+    /// Wallet + vault balance (Phase 6, ADR 0009 §2): what wealth FEELS
+    /// like in scoring; spendability stays `cash_mills`.
+    wealth_mills: i64,
     /// The employer, when the citizen holds a job (Phase 5).
     workplace: Option<Entity>,
 }
@@ -158,7 +161,7 @@ impl DecideSystem {
             * self.tables.time_cost_micro_per_tick as f64
             / MICRO;
         let mu = (self.tables.mu_scale_micro as f64 / MICRO)
-            / (1.0 + decider.cash_mills as f64 / self.tables.half_wealth_mills as f64);
+            / (1.0 + decider.wealth_mills as f64 / self.tables.half_wealth_mills as f64);
         let money_cost = offer.unit_price.mills() as f64 * mu;
 
         gain * self.urgency(deficit) * self.trait_factor(&decider.traits, offer.need_index)
@@ -395,6 +398,14 @@ impl System for DecideSystem {
             list
         };
 
+        // Deposit balances (Phase 6): wealth = wallet + vault row.
+        let mut vault: std::collections::BTreeMap<u32, i64> = std::collections::BTreeMap::new();
+        if let Some((_, book)) = world.iter::<core_ecs::sim_interface::BankBook>()?.next() {
+            for (owner, balance) in &book.deposits {
+                vault.insert(owner.index(), balance.mills());
+            }
+        }
+
         // Pass 1 (immutable): snapshot citizens that need a decision.
         let mut deciders: Vec<Decider> = Vec::new();
         for (entity, needs) in world.iter::<Needs>()? {
@@ -419,6 +430,11 @@ impl System for DecideSystem {
                     .get::<Wallet>(entity)?
                     .map(|wallet| wallet.cash.mills())
                     .unwrap_or(0),
+                wealth_mills: world
+                    .get::<Wallet>(entity)?
+                    .map(|wallet| wallet.cash.mills())
+                    .unwrap_or(0)
+                    + vault.get(&entity.index()).copied().unwrap_or(0),
                 workplace: world
                     .get::<Employment>(entity)?
                     .map(|employment| employment.employer),
