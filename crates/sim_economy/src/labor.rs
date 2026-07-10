@@ -181,14 +181,21 @@ impl LaborMarketSystem {
             .and_then(|x| x.checked_mul(cash))
             .ok_or_else(|| overflow("reservation raise"))?
             / 1000
-            / (cash + labor.reservation_half_wealth_mills).max(1);
+            / cash
+                .checked_add(labor.reservation_half_wealth_mills)
+                .ok_or_else(|| overflow("reservation divisor"))?
+                .max(1);
         // Trait discount: base × discount/1000 × trait/1000.
         let discount = base
             .checked_mul(labor.reservation_trait_discount_per_mille)
             .and_then(|x| x.checked_mul(trait_per_mille.clamp(0, 1000)))
             .ok_or_else(|| overflow("reservation discount"))?
             / 1_000_000;
-        Ok((base + raise - discount).max(1))
+        Ok(base
+            .checked_add(raise)
+            .and_then(|x| x.checked_sub(discount))
+            .ok_or_else(|| overflow("reservation total"))?
+            .max(1))
     }
 
     /// A firm's bid for one worker: `bid_fraction` of the expected daily
@@ -307,7 +314,13 @@ impl System for LaborMarketSystem {
             if bid < ask {
                 break;
             }
-            hires.push((*citizen, *firm, Money::from_mills((ask + bid) / 2)));
+            let midpoint =
+                ask.checked_add(*bid)
+                    .ok_or(EcsError::Arithmetic(ArithmeticError::Overflow {
+                        op: "wage midpoint",
+                    }))?
+                    / 2;
+            hires.push((*citizen, *firm, Money::from_mills(midpoint)));
         }
         let hired = hires.len() as u32;
         for (citizen, employer, wage_per_day) in hires {

@@ -65,8 +65,12 @@ SPEC §12 assigns labor the daily double-auction. Day-rate
   per kind, data) posts one bid per open slot at its **bid wage**: the
   worker's expected daily marginal product — output units per worker-day
   at the current posted price — times a data-defined
-  `bid_fraction_per_mille` (what the firm keeps as margin), clamped to
-  what its wallet could actually pay for a day.
+  `bid_fraction_per_mille` (what the firm keeps as margin), clamped for
+  affordability to `wallet / positions` — the whole roster must be
+  payable for a day out of cash on hand, since a firm bids several open
+  slots at once and payroll would otherwise fire tomorrow whoever it
+  overhired today. (The clamp deliberately ignores wages already
+  committed; pricing that commitment properly is Phase 6 credit's job.)
 - **Asks (citizens):** every working-age, unemployed citizen asks their
   **reservation wage**: data base value scaled by wealth (the same
   marginal-utility-of-wealth shape purchases use: the richer, the

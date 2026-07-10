@@ -163,3 +163,6 @@ use validate_econ::{validate_economy, validate_labor};
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "tests_econ.rs"]
+mod tests_econ;

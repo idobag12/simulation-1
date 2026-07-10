@@ -21,6 +21,7 @@ pub mod config;
 pub mod genesis;
 pub mod labor;
 pub mod systems;
+mod transact;
 
 pub use components::{Firm, Production};
 pub use config::{
