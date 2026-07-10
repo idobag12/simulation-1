@@ -249,3 +249,58 @@ fn settle_death(w: &mut World, entity: Entity, household: Option<Entity>) -> Res
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::Sex;
+    use core_types::{CalendarTime, Seed, Ticks};
+
+    /// ADR 0008 §2: the marker lands exactly on the birthday crossing the
+    /// threshold — not a day before, never only at genesis.
+    #[test]
+    fn working_age_is_stamped_on_the_crossing_birthday() {
+        const YEAR: u64 = 120 * 1440;
+        let mut world = World::new(Seed::new(1), 16);
+        world.register::<Identity>().expect("register");
+        world.register::<WorkingAge>().expect("register");
+        let child = world.spawn();
+        // Born exactly 16 years before tick YEAR: at tick 0 they are 15,
+        // at tick YEAR they turn 16.
+        world
+            .insert(
+                child,
+                Identity {
+                    given_name: "Twig".into(),
+                    family_name: "Ashdown".into(),
+                    sex: Sex::Female,
+                    birth_tick: -((15 * YEAR) as i64),
+                },
+            )
+            .expect("insert");
+
+        let mut system = WorkingAgeSystem::new(16, YEAR);
+        let mut cmd = CommandBuffer::new();
+        let at = |tick: u64| TickContext {
+            tick: Ticks::new(tick),
+            time: CalendarTime::START,
+        };
+        system.run(&mut world, &at(0), &mut cmd).expect("run");
+        assert!(
+            world.get::<WorkingAge>(child).expect("get").is_none(),
+            "a 15-year-old stays outside the labor force"
+        );
+        system
+            .run(&mut world, &at(YEAR - 1440), &mut cmd)
+            .expect("run");
+        assert!(
+            world.get::<WorkingAge>(child).expect("get").is_none(),
+            "the day before the birthday still does not count"
+        );
+        system.run(&mut world, &at(YEAR), &mut cmd).expect("run");
+        assert!(
+            world.get::<WorkingAge>(child).expect("get").is_some(),
+            "the 16th birthday joins the labor force"
+        );
+    }
+}

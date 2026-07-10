@@ -15,9 +15,24 @@ use core_types::{ArithmeticError, Money};
 use crate::components::Firm;
 use crate::config::EconTables;
 
-/// The ledger entity (carries `LaborStats` beside `EconCounters`).
-fn stats_entity(world: &World) -> Result<Option<Entity>, EcsError> {
-    Ok(world.iter::<LaborStats>()?.next().map(|(entity, _)| entity))
+/// The ledger entity — the economy's presence signal, shared with every
+/// other economy system (`EconCounters`, not `LaborStats`: a world
+/// migrated from v5 HAS an economy but genesis never gave it a labor
+/// ledger). The stats row is created here on first use, so migrated
+/// towns catch up honestly on their first day boundary instead of
+/// never hiring again (ADR 0008 §8).
+fn ledger_entity(world: &mut World) -> Result<Option<Entity>, EcsError> {
+    let Some(ledger) = world
+        .iter::<core_ecs::sim_interface::EconCounters>()?
+        .next()
+        .map(|(entity, _)| entity)
+    else {
+        return Ok(None);
+    };
+    if world.get::<LaborStats>(ledger)?.is_none() {
+        world.insert(ledger, LaborStats::default())?;
+    }
+    Ok(Some(ledger))
 }
 
 fn bump_stats(
@@ -60,8 +75,8 @@ impl System for PayrollSystem {
         _ctx: &TickContext,
         _cmd: &mut CommandBuffer,
     ) -> Result<(), EcsError> {
-        let Some(ledger) = stats_entity(world)? else {
-            return Ok(()); // no economy (migrated pre-v5 world)
+        let Some(ledger) = ledger_entity(world)? else {
+            return Ok(()); // no economy at all (migrated pre-v5 world)
         };
         // Pass 1 (immutable): the payroll roster in citizen entity order,
         // plus per-firm headcounts for the redundancy check.
@@ -170,7 +185,11 @@ impl LaborMarketSystem {
     }
 
     /// A citizen's reservation wage (exact integer arithmetic).
-    fn reservation(&self, cash_mills: i64, trait_per_mille: i64) -> Result<i64, EcsError> {
+    pub(crate) fn reservation(
+        &self,
+        cash_mills: i64,
+        trait_per_mille: i64,
+    ) -> Result<i64, EcsError> {
         let labor = &self.tables.labor;
         let base = labor.reservation_base_mills;
         let overflow = |op: &'static str| EcsError::Arithmetic(ArithmeticError::Overflow { op });
@@ -200,12 +219,15 @@ impl LaborMarketSystem {
 
     /// A firm's bid for one worker: `bid_fraction` of the expected daily
     /// marginal product (output per worker-day at the posted price),
-    /// clamped to what the wallet could pay each employee for a day.
+    /// clamped so the wallet could cover the wages already committed to
+    /// incumbents PLUS this day's open slots (ADR 0008 §3).
     fn bid(
         &self,
         kind: &crate::config::FirmKindTable,
         posted_price: Money,
         cash: Money,
+        committed_wages: i64,
+        open_slots: u32,
     ) -> Result<i64, EcsError> {
         let overflow = |op: &'static str| EcsError::Arithmetic(ArithmeticError::Overflow { op });
         let recipe =
@@ -230,8 +252,14 @@ impl LaborMarketSystem {
             .checked_mul(self.tables.labor.bid_fraction_per_mille)
             .ok_or_else(|| overflow("bid fraction"))?
             / 1000;
-        // Affordability: a full roster must be payable for a day.
-        let affordable = cash.mills() / i64::from(kind.positions.max(1));
+        // Affordability: incumbents' committed wages plus every open
+        // slot must be payable for a day out of cash on hand.
+        let free = cash
+            .mills()
+            .checked_sub(committed_wages)
+            .ok_or_else(|| overflow("bid free cash"))?
+            .max(0);
+        let affordable = free / i64::from(open_slots.max(1));
         Ok(bid.min(affordable))
     }
 }
@@ -247,8 +275,8 @@ impl System for LaborMarketSystem {
         _ctx: &TickContext,
         _cmd: &mut CommandBuffer,
     ) -> Result<(), EcsError> {
-        let Some(ledger) = stats_entity(world)? else {
-            return Ok(()); // no economy (migrated pre-v5 world)
+        let Some(ledger) = ledger_entity(world)? else {
+            return Ok(()); // no economy at all (migrated pre-v5 world)
         };
 
         // Pass 1 (immutable): asks — unemployed working-age citizens, in
@@ -280,8 +308,11 @@ impl System for LaborMarketSystem {
 
         // Bids — one per open slot, in firm entity order.
         let mut headcount: BTreeMap<u32, u32> = BTreeMap::new();
+        let mut committed: BTreeMap<u32, i64> = BTreeMap::new();
         for (_, employment) in world.iter::<Employment>()? {
             *headcount.entry(employment.employer.index()).or_insert(0) += 1;
+            *committed.entry(employment.employer.index()).or_insert(0) +=
+                employment.wage_per_day.mills();
         }
         let mut bids: Vec<(Entity, i64)> = Vec::new();
         for (firm_entity, firm) in world.iter::<Firm>()? {
@@ -297,7 +328,8 @@ impl System for LaborMarketSystem {
                 .get::<Wallet>(firm_entity)?
                 .map(|wallet| wallet.cash)
                 .unwrap_or(Money::ZERO);
-            let bid = self.bid(kind, firm.posted_price, cash)?;
+            let committed_wages = committed.get(&firm_entity.index()).copied().unwrap_or(0);
+            let bid = self.bid(kind, firm.posted_price, cash, committed_wages, open)?;
             if bid < 1 {
                 continue;
             }

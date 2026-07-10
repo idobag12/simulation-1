@@ -239,14 +239,16 @@ const V5_FIXTURE: &[u8] =
     include_bytes!("../fixtures/v5_seed29_fixture30_citizens250_tick2600.embersave");
 
 /// Golden hash of the v5 fixture at load (re-recorded Phase 5: the
-/// migrated v5 town has no working-age markers until its first day-rate
-/// promotion — nobody is hired out of thin air; the labor systems catch
-/// up honestly from real ages).
+/// migrated v5 town has no working-age markers or labor stats until its
+/// first day boundary — nobody is hired out of thin air; the promotion
+/// stamps real adults, the ledger grows its stats row, and the market
+/// hires — proven semantically by
+/// `v5_migrated_economy_catches_up_with_the_labor_market`).
 const V5_GOLDEN_HASH_AT_LOAD: u64 = 0x6eae_4ca1_1152_2c40;
 
 /// Golden hash after resuming the v5 fixture 700 ticks (purchases,
 /// trades, repricing, and the daily audit all run again).
-const V5_GOLDEN_HASH_AFTER_700: u64 = 0xe186_abcb_01b4_815c;
+const V5_GOLDEN_HASH_AFTER_700: u64 = 0x62cd_cec9_317f_48a8;
 
 #[test]
 fn v5_golden_save_loads_to_the_exact_golden_state() {
@@ -297,6 +299,56 @@ fn v5_golden_save_loads_to_the_exact_golden_state() {
     );
 }
 
+/// The migrated v5 economy CATCHES UP (ADR 0008 §8): at load nobody is
+/// working-age or employed (migrations never invent state), and after
+/// the first day boundary the promotion stamps real adults, the ledger
+/// grows its labor stats, and the market genuinely hires — a migrated
+/// town's firms keep producing instead of idling forever.
+#[test]
+fn v5_migrated_economy_catches_up_with_the_labor_market() {
+    let mut sim = persistence::load_from_bytes(V5_FIXTURE, load_config(), runner::register_world)
+        .expect("committed v5 save no longer loads");
+    let world = sim.world();
+    assert_eq!(
+        world
+            .iter::<core_ecs::sim_interface::WorkingAge>()
+            .expect("query")
+            .count(),
+        0,
+        "migrations never invent state"
+    );
+    assert_eq!(
+        world
+            .iter::<core_ecs::sim_interface::Employment>()
+            .expect("query")
+            .count(),
+        0
+    );
+    let derived = runner::derive_spec_from_world(world).expect("derive");
+    let mut schedule = runner::build_schedule(&derived, &pinned_defs());
+    // Tick 2600 → 3400 crosses the day boundary at 2880: promotion,
+    // clearing, and the first shift hours.
+    sim.run_ticks(&mut schedule, 800).expect("resume");
+    let world = sim.world();
+    assert!(
+        world
+            .iter::<core_ecs::sim_interface::WorkingAge>()
+            .expect("query")
+            .count()
+            > 100,
+        "the promotion stamped the town's real adults"
+    );
+    assert!(
+        world
+            .iter::<core_ecs::sim_interface::Employment>()
+            .expect("query")
+            .count()
+            > 10,
+        "the market hired out of the catch-up"
+    );
+    assert!(debug_tools::audit_economy(world).expect("audit"));
+}
+
 #[test]
 fn v5_golden_save_resumes_deterministically() {
     let mut sim = persistence::load_from_bytes(V5_FIXTURE, load_config(), runner::register_world)
@@ -316,25 +368,24 @@ fn v5_golden_save_resumes_deterministically() {
 // --- v6 (Phase 5: labor — employment, wages, payroll, unemployment) -----
 
 /// Committed v6 fixture: seed 37, 30 fixture entities + 250 citizens +
-/// the working economy, 2,600 ticks (past a day boundary: payroll and
-/// the labor clearing have run; citizens hold jobs and have been paid;
-/// batches are labor-gated), saved with actions in flight and live
-/// event/scheduler state.
+/// the working economy, 2,000 ticks — 09:20 on day 1, MID-SHIFT: the
+/// clearing has hired, wages have been paid, and citizens are at work
+/// (`Work`/`WorkTravel` in flight) when the save lands.
 const V6_FIXTURE: &[u8] =
-    include_bytes!("../fixtures/v6_seed37_fixture30_citizens250_tick2600.embersave");
+    include_bytes!("../fixtures/v6_seed37_fixture30_citizens250_tick2000.embersave");
 
 /// Golden hash of the v6 fixture at load.
-const V6_GOLDEN_HASH_AT_LOAD: u64 = 0xe9bf_62fc_3623_a79e;
+const V6_GOLDEN_HASH_AT_LOAD: u64 = 0x9403_5b14_3968_183b;
 
-/// Golden hash after resuming the v6 fixture 700 ticks (the shift, more
-/// purchases, and another day boundary's payroll/clearing/audit).
-const V6_GOLDEN_HASH_AFTER_700: u64 = 0x9920_f57a_7380_77fc;
+/// Golden hash after resuming the v6 fixture 1,000 ticks (the rest of
+/// the shift, then the 2,880 day boundary's audit/payroll/clearing).
+const V6_GOLDEN_HASH_AFTER_1000: u64 = 0xbf85_c4a8_de2d_a534;
 
 #[test]
 fn v6_golden_save_loads_to_the_exact_golden_state() {
     let sim = persistence::load_from_bytes(V6_FIXTURE, load_config(), runner::register_world)
         .expect("committed v6 save no longer loads: save-format break without a migration");
-    assert_eq!(sim.tick(), Ticks::new(2600));
+    assert_eq!(sim.tick(), Ticks::new(2000));
     assert_eq!(sim.seed(), Seed::new(37));
     // The fixture was saved with a LIVE labor market: jobs held, wages
     // cleared, the stats written.
@@ -351,6 +402,23 @@ fn v6_golden_save_loads_to_the_exact_golden_state() {
         .map(|(_, s)| *s)
         .expect("the labor ledger exists");
     assert!(stats.hires > 0 && stats.seeking > 0);
+    // The Phase 5 action variants are in flight at the save point, so the
+    // resume golden genuinely covers their (de)serialization and
+    // continuation (SPEC §9) — the fixture is saved mid-shift.
+    let working = world
+        .iter::<sim_ai::CurrentAction>()
+        .expect("query")
+        .filter(|(_, action)| {
+            matches!(
+                action,
+                sim_ai::CurrentAction::Work { .. } | sim_ai::CurrentAction::WorkTravel { .. }
+            )
+        })
+        .count();
+    assert!(
+        working > 0,
+        "the v6 fixture must have work actions in flight"
+    );
     assert!(
         debug_tools::audit_economy(world).expect("audit"),
         "the loaded fixture must satisfy every conservation identity"
@@ -371,10 +439,10 @@ fn v6_golden_save_resumes_deterministically() {
     assert!(derived.fixture);
     assert!(derived.economy);
     let mut schedule = runner::build_schedule(&derived, &pinned_defs());
-    sim.run_ticks(&mut schedule, 700).expect("resume failed");
+    sim.run_ticks(&mut schedule, 1000).expect("resume failed");
     assert_eq!(
         sim.state_hash().expect("hash failed"),
-        WorldHash::new(V6_GOLDEN_HASH_AFTER_700),
+        WorldHash::new(V6_GOLDEN_HASH_AFTER_1000),
         "resumed evolution diverged from the recording"
     );
 }

@@ -51,7 +51,45 @@ full workspace suite — 150+ tests including the 1M-tick, 10k-citizen,
 standards+anti-shortcut/ADR-fidelity, test-coverage) over the phase diff,
 findings verified against the code before acting.
 
-<!-- REVIEW-RESULTS -->
+Confirmed findings, all fixed in the follow-up commits:
+
+- **Migrated v5 economies never ran the labor systems** (major): payroll
+  and the clearing gated on `LaborStats`, which only fresh genesis
+  creates — with production now labor-gated, a migrated town's firms
+  would idle forever, contradicting the documented catch-up. The labor
+  systems now key off `EconCounters` like every other economy system and
+  create the stats row on first use;
+  `save_compat::v5_migrated_economy_catches_up_with_the_labor_market`
+  proves the catch-up semantically (no invented state at load; real
+  hires after the first day boundary). The v5 resume golden re-recorded
+  with this reason.
+- **Five modules crossed the SPEC §3 500-line rule** (major): split
+  (migration tests, seeded-error validation tests, CLI tests,
+  `PlanSystem`, and the economy transaction helpers each into their own
+  files).
+- **Bid affordability ignored committed payroll** (minor): firms could
+  deterministically hire into a guaranteed next-morning insolvency
+  firing, pumping the hire/fire counters. The clamp now reserves
+  incumbents' wages before funding open slots (ADR 0008 §3 amended);
+  unit-tested.
+- **Unchecked add/sub amid checked multiplications** in the reservation
+  and wage-midpoint arithmetic (minor): now checked.
+- **Coverage gaps** (one major, several minor), all closed with direct
+  tests: the v6 fixture is now saved MID-SHIFT with `Work`/`WorkTravel`
+  asserted in flight (and resumes across a payroll boundary); redundancy
+  firing; the reservation formula's wealth/trait terms, value by value;
+  the committed-payroll bid clamp; the `min_workers ≥ 2` staffing
+  boundary; the WorkingAge birthday promotion; and deaths reopening
+  slots that the market then refills near capacity with conservation
+  intact.
+
+Verified clean by the reviewers (recorded): deterministic sorts and
+tie-breaks throughout the auction; clean despawn of employed citizens
+(estate settles, payroll never sees a dead roster entry); correct enum
+variant appends; layering (labor reads only `sim_interface` types);
+no silent fakes (wages only via booked payroll, hires only via the
+clearing, the Work act produces nothing itself, unemployment measured
+never assigned); registration order matching ADR 0008 §8 exactly.
 
 ## Deviations from spec (all pre-declared in ADRs)
 

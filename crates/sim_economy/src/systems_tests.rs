@@ -498,3 +498,155 @@ fn the_daily_clearing_matches_bids_to_asks_and_measures_the_rest() {
     // captures the largest surplus — wages genuinely disperse.
     assert!(w0 != w1, "heterogeneous matches clear at distinct wages");
 }
+
+#[test]
+fn min_workers_thresholds_gate_batch_starts_exactly() {
+    // The live-data boundary that matters: min_workers 2 with one worker
+    // present must idle; the second worker unlocks the batch.
+    let mut tables = tables();
+    tables.firm_kinds[0].min_workers = 2;
+    let mut world = world_with_firms(&tables);
+    let farm = firm_entities(&world)[0];
+    staff(&mut world, farm);
+    let mut system = crate::ProductionSystem::new(tables);
+    let mut cmd = CommandBuffer::new();
+    system.run(&mut world, &ctx(), &mut cmd).expect("run");
+    assert!(
+        world.get::<Production>(farm).expect("get").is_none(),
+        "1 of 2 required workers present must idle the firm"
+    );
+    staff(&mut world, farm);
+    system.run(&mut world, &ctx(), &mut cmd).expect("run");
+    assert!(
+        world.get::<Production>(farm).expect("get").is_some(),
+        "the second worker unlocks the batch"
+    );
+}
+
+#[test]
+fn payroll_fires_redundant_extras_down_to_positions() {
+    // Two positions, three employees (as if data shrank): the highest-
+    // indexed extra is fired with reason Redundant and never paid; the
+    // two keepers are paid normally.
+    let tables = tables();
+    let mut world = world_with_firms(&tables);
+    let farm = firm_entities(&world)[0];
+    let workers: Vec<core_ecs::Entity> = (0..3).map(|_| staff(&mut world, farm)).collect();
+    let mut payroll = crate::PayrollSystem::new(tables);
+    let mut cmd = CommandBuffer::new();
+    payroll.run(&mut world, &ctx(), &mut cmd).expect("run");
+
+    assert!(
+        world.get::<Employment>(workers[2]).expect("get").is_none(),
+        "the highest-indexed extra is fired"
+    );
+    assert_eq!(
+        world
+            .get::<Wallet>(workers[2])
+            .expect("get")
+            .expect("some")
+            .cash,
+        Money::ZERO,
+        "a redundantly fired worker is not paid"
+    );
+    for keeper in &workers[..2] {
+        assert!(world.get::<Employment>(*keeper).expect("get").is_some());
+        assert_eq!(
+            world
+                .get::<Wallet>(*keeper)
+                .expect("get")
+                .expect("some")
+                .cash,
+            Money::from_mills(100),
+            "keepers are paid normally"
+        );
+    }
+    world.begin_tick(Ticks::new(1));
+    let fired = world
+        .events::<core_ecs::sim_interface::Fired>()
+        .expect("events");
+    assert_eq!(fired.len(), 1);
+    assert!(matches!(
+        fired[0].reason,
+        core_ecs::sim_interface::FiredReason::Redundant
+    ));
+    let stats = world
+        .iter::<core_ecs::sim_interface::LaborStats>()
+        .expect("query")
+        .next()
+        .map(|(_, s)| *s)
+        .expect("stats");
+    assert_eq!(stats.firings, 1);
+}
+
+#[test]
+fn reservation_wages_rise_with_wealth_and_fall_with_industriousness() {
+    // ADR 0008 §3's ask formula, term by term (base 150, wealth 300‰
+    // saturating at half-wealth 20k, trait discount 400‰).
+    let market = crate::LaborMarketSystem::new(tables());
+    let broke_lazy = market.reservation(0, 0).expect("ask");
+    assert_eq!(broke_lazy, 150, "base only");
+    let rich_lazy = market.reservation(20_000, 0).expect("ask");
+    assert_eq!(rich_lazy, 150 + 22, "half-wealth adds half the 45-mill cap");
+    let richest_lazy = market.reservation(i64::MAX / 2_000_000, 0).expect("ask");
+    assert!(
+        (150 + 40..=150 + 45).contains(&richest_lazy),
+        "the wealth raise saturates near +45, got {richest_lazy}"
+    );
+    let broke_industrious = market.reservation(0, 1000).expect("ask");
+    assert_eq!(
+        broke_industrious,
+        150 - 60,
+        "full trait discounts 400‰ of base"
+    );
+    assert!(
+        market.reservation(20_000, 1000).expect("ask") < rich_lazy,
+        "industriousness undercuts an equally wealthy twin"
+    );
+}
+
+#[test]
+fn bids_reserve_committed_payroll_before_funding_new_slots() {
+    // A firm with an expensive incumbent and thin cash must bid low on
+    // its open slot instead of hiring into a guaranteed next-morning
+    // insolvency firing (ADR 0008 §3).
+    let mut tables = tables();
+    tables.firm_kinds[1].positions = 0; // only the farm bids
+    let mut world = world_with_firms(&tables);
+    let farm = firm_entities(&world)[0]; // positions 2
+    let incumbent = staff(&mut world, farm);
+    world
+        .get_mut::<Employment>(incumbent)
+        .expect("get")
+        .expect("some")
+        .wage_per_day = Money::from_mills(9_900);
+    // Cash 10_000: 100 mills free after the incumbent's committed wage.
+    let seeker = world.spawn();
+    world
+        .insert(seeker, Wallet { cash: Money::ZERO })
+        .expect("insert");
+    world
+        .insert(
+            seeker,
+            core_ecs::sim_interface::Personality {
+                weights: vec![1000],
+            },
+        )
+        .expect("insert");
+    world
+        .insert(seeker, core_ecs::sim_interface::WorkingAge)
+        .expect("insert");
+
+    let mut market = crate::LaborMarketSystem::new(tables);
+    let mut cmd = CommandBuffer::new();
+    market.run(&mut world, &ctx(), &mut cmd).expect("run");
+
+    // A refusal to hire (bid below the ask) is equally correct here.
+    if let Some(employment) = world.get::<Employment>(seeker).expect("get") {
+        assert!(
+            employment.wage_per_day.mills() + 9_900 <= 10_000,
+            "a hire may only happen if the whole payroll stays payable (wage {})",
+            employment.wage_per_day
+        );
+    }
+}

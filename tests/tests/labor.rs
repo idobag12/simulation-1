@@ -227,3 +227,43 @@ fn wages_flow_from_firms_to_workers() {
     );
     assert!(debug_tools::audit_economy(world).expect("audit"));
 }
+
+/// Deaths reopen slots and the market refills them (ADR 0008 §§3–4 with
+/// mortality in the loop): under heavy mortality the town keeps every
+/// slot staffed, rehiring as workers die, with conservation intact.
+#[test]
+fn deaths_reopen_slots_and_the_market_refills_them() {
+    let mut defs = pinned_defs();
+    defs.people.mortality.bands.clear();
+    // ~3%/day: dozens of deaths across 12 days of a 150-citizen town.
+    defs.people.mortality.terminal_per_day_chance_per_billion = 30_000_000;
+    let (mut sim, mut schedule) =
+        runner::build_simulation(&WorldSpec::town(Seed::new(96), 150), &defs).expect("build");
+    sim.run_ticks(&mut schedule, 12 * TICKS_PER_DAY)
+        .expect("run (the daily auditor rides along)");
+
+    let world = sim.world();
+    let population = headless::inspect::population(world).expect("count");
+    assert!(population < 140, "the run must contain real deaths");
+    let stats = labor_stats(world);
+    // Not every slot must be filled — a churned firm's bid can honestly
+    // price below every ask — but the workforce stays near capacity:
+    // slots freed by death REFILL rather than leak.
+    assert!(
+        stats.employed * 5 >= total_positions(&defs) * 4,
+        "the town stays near full staffing despite the deaths ({} of {})",
+        stats.employed,
+        total_positions(&defs)
+    );
+    assert!(
+        stats.hires > u64::from(total_positions(&defs)),
+        "rehiring happened ({} hires for {} slots)",
+        stats.hires,
+        total_positions(&defs)
+    );
+    // Every job belongs to a live citizen (despawn cleaned Employment).
+    for (citizen, _) in world.iter::<Employment>().expect("query") {
+        assert!(world.is_alive(citizen));
+    }
+    assert!(debug_tools::audit_economy(world).expect("audit"));
+}
