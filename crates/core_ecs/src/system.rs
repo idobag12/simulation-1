@@ -49,7 +49,10 @@ pub enum Rate {
 ///   after `run` returns (SPEC §6, ADR 0002 §5).
 /// - Errors abort the tick and propagate (SPEC §3); a system must never
 ///   panic or swallow a failure.
-pub trait System {
+// `Send` so an application may drive the schedule from its own thread
+// (the viewer's sim thread, ADR 0013 §3); systems hold only immutable
+// config data.
+pub trait System: Send {
     /// Stable diagnostic name, used to attribute failures and (later)
     /// per-system tracing spans.
     fn name(&self) -> &'static str;
@@ -80,6 +83,11 @@ pub struct Schedule {
     day_systems: Vec<Box<dyn System>>,
     season_systems: Vec<Box<dyn System>>,
     year_systems: Vec<Box<dyn System>>,
+    /// Per-system elapsed micros for the LAST tick (SPEC §13's timing
+    /// table; Phase 10, ADR 0013 §5). `None` = collection off (the
+    /// default — the CLI and tests never pay). Wall time NEVER enters
+    /// world state: this is observability only.
+    timings: Option<Vec<(&'static str, u64)>>,
 }
 
 impl Schedule {
@@ -125,19 +133,22 @@ impl Schedule {
     /// command-buffer application (the defined point, SPEC §6). Failures
     /// are wrapped with the system's name and abort the tick.
     pub fn run_tick(&mut self, world: &mut World, ctx: &TickContext) -> Result<(), EcsError> {
+        if let Some(table) = self.timings.as_mut() {
+            table.clear();
+        }
         if ctx.time.starts_year() {
-            Self::run_list(&mut self.year_systems, world, ctx)?;
+            Self::run_list(&mut self.year_systems, world, ctx, &mut self.timings)?;
         }
         if ctx.time.starts_season() {
-            Self::run_list(&mut self.season_systems, world, ctx)?;
+            Self::run_list(&mut self.season_systems, world, ctx, &mut self.timings)?;
         }
         if ctx.time.starts_day() {
-            Self::run_list(&mut self.day_systems, world, ctx)?;
+            Self::run_list(&mut self.day_systems, world, ctx, &mut self.timings)?;
         }
         if ctx.time.starts_hour() {
-            Self::run_list(&mut self.hour_systems, world, ctx)?;
+            Self::run_list(&mut self.hour_systems, world, ctx, &mut self.timings)?;
         }
-        Self::run_list(&mut self.tick_systems, world, ctx)
+        Self::run_list(&mut self.tick_systems, world, ctx, &mut self.timings)
     }
 
     /// Runs one COARSE tick (Phase 8, ADR 0011 §5 — the catch-up
@@ -149,17 +160,20 @@ impl Schedule {
         world: &mut World,
         ctx: &TickContext,
     ) -> Result<(), EcsError> {
+        if let Some(table) = self.timings.as_mut() {
+            table.clear();
+        }
         if ctx.time.starts_year() {
-            Self::run_list(&mut self.year_systems, world, ctx)?;
+            Self::run_list(&mut self.year_systems, world, ctx, &mut self.timings)?;
         }
         if ctx.time.starts_season() {
-            Self::run_list(&mut self.season_systems, world, ctx)?;
+            Self::run_list(&mut self.season_systems, world, ctx, &mut self.timings)?;
         }
         if ctx.time.starts_day() {
-            Self::run_list(&mut self.day_systems, world, ctx)?;
+            Self::run_list(&mut self.day_systems, world, ctx, &mut self.timings)?;
         }
         if ctx.time.starts_hour() {
-            Self::run_list(&mut self.hour_systems, world, ctx)?;
+            Self::run_list(&mut self.hour_systems, world, ctx, &mut self.timings)?;
         }
         Ok(())
     }
@@ -168,6 +182,7 @@ impl Schedule {
         systems: &mut [Box<dyn System>],
         world: &mut World,
         ctx: &TickContext,
+        timings: &mut Option<Vec<(&'static str, u64)>>,
     ) -> Result<(), EcsError> {
         for system in systems {
             let mut cmd = CommandBuffer::new();
@@ -176,10 +191,26 @@ impl Schedule {
                 system: name,
                 source: Box::new(source),
             };
+            let started = timings.as_ref().map(|_| std::time::Instant::now());
             system.run(world, ctx, &mut cmd).map_err(wrap)?;
             cmd.apply(world).map_err(wrap)?;
+            if let (Some(table), Some(started)) = (timings.as_mut(), started) {
+                table.push((name, started.elapsed().as_micros() as u64));
+            }
         }
         Ok(())
+    }
+
+    /// Turns on the per-system timing table (the viewer's SPEC §13
+    /// timing row). Off by default; collection never touches world
+    /// state.
+    pub fn enable_timing(&mut self) {
+        self.timings = Some(Vec::new());
+    }
+
+    /// The last tick's `(system, elapsed micros)` rows, when enabled.
+    pub fn last_timings(&self) -> &[(&'static str, u64)] {
+        self.timings.as_deref().unwrap_or(&[])
     }
 }
 
@@ -326,6 +357,32 @@ mod tests {
             world.get::<Log>(e).unwrap(),
             Some(&Log(vec![5, 4, 3, 2, 1, 2, 1, 4, 3, 2, 1]))
         );
+    }
+
+    #[test]
+    fn timing_table_holds_exactly_the_last_tick_fine_or_coarse() {
+        let (mut world, _) = world_with_log();
+        let mut schedule = Schedule::new();
+        schedule.add_system(Rate::Hour, Box::new(Tagger { tag: 1 }));
+        schedule.add_system(Rate::Tick, Box::new(Tagger { tag: 2 }));
+        schedule.enable_timing();
+
+        schedule
+            .run_tick(&mut world, &ctx_at(0, CalendarTime::START))
+            .unwrap();
+        assert_eq!(schedule.last_timings().len(), 2);
+        schedule
+            .run_tick_coarse(&mut world, &ctx_at(0, CalendarTime::START))
+            .unwrap();
+        assert_eq!(
+            schedule.last_timings().len(),
+            1,
+            "a coarse tick replaces the table (hour rate only) — never appends"
+        );
+        schedule
+            .run_tick_coarse(&mut world, &ctx_at(0, CalendarTime::START))
+            .unwrap();
+        assert_eq!(schedule.last_timings().len(), 1);
     }
 
     #[test]

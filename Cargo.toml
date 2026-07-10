@@ -56,3 +56,4 @@ debug_tools = { path = "crates/debug_tools" }
 
 # Internal — front layer.
 headless = { path = "crates/headless" }
+viewer = { path = "crates/viewer" }

@@ -24,4 +24,5 @@ debug_tools = { workspace = true }
 sim_people = { workspace = true }
 persistence = { workspace = true }
 headless = { workspace = true }
+viewer = { workspace = true }
 serde = { workspace = true }

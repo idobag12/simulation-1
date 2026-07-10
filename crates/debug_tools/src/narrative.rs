@@ -33,6 +33,17 @@ fn name_of(world: &World, entity: Entity) -> String {
 /// Composes the retained event log into human-readable story lines,
 /// oldest chain first. `subject` filters to one citizen's stories.
 pub fn stories(world: &World, subject: Option<u32>) -> Result<Vec<String>, EcsError> {
+    Ok(stories_with_subjects(world)?
+        .into_iter()
+        .filter(|(subjects, _)| subject.is_none_or(|index| subjects.contains(&index)))
+        .map(|(_, line)| line)
+        .collect())
+}
+
+/// [`stories`] with each line's subject entity indices attached, so a
+/// viewer can attribute lines to a citizen by INDEX rather than by
+/// name-matching (Phase 10 — two citizens may share a name).
+pub fn stories_with_subjects(world: &World) -> Result<Vec<(Vec<u32>, String)>, EcsError> {
     // Decode the ring into per-subject timelines (day, happening),
     // preserving log order (oldest first).
     let mut timelines: Vec<(Entity, u64, Happening)> = Vec::new();
@@ -86,15 +97,12 @@ pub fn stories(world: &World, subject: Option<u32>) -> Result<Vec<String>, EcsEr
         }
     }
 
-    let mut lines: Vec<String> = Vec::new();
-    let visible = |entity: Entity| subject.is_none_or(|index| entity.index() == index);
+    let mut lines: Vec<(Vec<u32>, String)> = Vec::new();
     for (position, (who, day, happening)) in timelines.iter().enumerate() {
         match happening {
             // Courtship → marriage → birth (the family chain).
             Happening::Married { partner } => {
-                if !(visible(*who) || visible(*partner)) {
-                    continue;
-                }
+                let mut subjects = vec![who.index(), partner.index()];
                 let mut line = format!(
                     "{} and {} married on day {day}",
                     name_of(world, *who),
@@ -122,15 +130,13 @@ pub fn stories(world: &World, subject: Option<u32>) -> Result<Vec<String>, EcsEr
                         "; their child {} was born on day {born_day}",
                         name_of(world, child)
                     ));
+                    subjects.push(child.index());
                 }
                 line.push('.');
-                lines.push(line);
+                lines.push((subjects, line));
             }
             // Job loss → new work (the labor chain).
             Happening::Fired => {
-                if !visible(*who) {
-                    continue;
-                }
                 let rehired = timelines[position..]
                     .iter()
                     .find(|(other, d2, later)| {
@@ -147,13 +153,10 @@ pub fn stories(world: &World, subject: Option<u32>) -> Result<Vec<String>, EcsEr
                         name_of(world, *who)
                     ),
                 };
-                lines.push(line);
+                lines.push((vec![who.index()], line));
             }
             // Default → foreclosure → renting again (the money chain).
             Happening::Defaulted => {
-                if !visible(*who) {
-                    continue;
-                }
                 let renting = timelines[position..]
                     .iter()
                     .find(|(other, d2, later)| {
@@ -168,21 +171,21 @@ pub fn stories(world: &World, subject: Option<u32>) -> Result<Vec<String>, EcsEr
                     ),
                     None => format!("{} defaulted on a loan on day {day}.", name_of(world, *who)),
                 };
-                lines.push(line);
+                lines.push((vec![who.index()], line));
             }
             // Births stand alone too (the town's registry).
             Happening::Born {
                 child,
                 other_parent,
             } => {
-                if !(visible(*who) || visible(*other_parent) || visible(*child)) {
-                    continue;
-                }
-                lines.push(format!(
-                    "{} was born to {} and {} on day {day}.",
-                    name_of(world, *child),
-                    name_of(world, *who),
-                    name_of(world, *other_parent)
+                lines.push((
+                    vec![child.index(), who.index(), other_parent.index()],
+                    format!(
+                        "{} was born to {} and {} on day {day}.",
+                        name_of(world, *child),
+                        name_of(world, *who),
+                        name_of(world, *other_parent)
+                    ),
                 ));
             }
             Happening::Hired | Happening::Rented => {}

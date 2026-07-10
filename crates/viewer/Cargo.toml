@@ -7,4 +7,21 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+# The documented invocation (ADR 0013 §3) is `embervale-viewer`, matching
+# the CLI's `embervale` binary naming.
+[[bin]]
+name = "embervale-viewer"
+path = "src/main.rs"
+
 [dependencies]
+eframe = "0.29"
+egui = "0.29"
+core_ecs = { workspace = true }
+core_types = { workspace = true }
+sim_ai = { workspace = true }
+sim_people = { workspace = true }
+sim_time = { workspace = true }
+data_defs = { workspace = true }
+debug_tools = { workspace = true }
+persistence = { workspace = true }
+headless = { workspace = true }

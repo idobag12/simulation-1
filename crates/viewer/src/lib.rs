@@ -1,8 +1,17 @@
-//! egui viewer consuming read-only snapshots (SPEC §13); rendering deps arrive with Phase 10.
+//! The egui viewer (Phase 10, ADR 0013): a read-only window onto a
+//! running simulation, split hard into a TOOLING layer (the snapshot
+//! protocol and pane builders — plain data, unit-tested, carrying the
+//! exit criterion) and a PAINT layer (`app`, egui) that only draws.
 //!
-//! Empty shell: built in Phase 10 (SPEC §15). Per SPEC §16.1 nothing is
-//! stubbed here — the crate exists only to fix the workspace layout and
-//! dependency rules from day one.
+//! Dependency rule (SPEC §4): `viewer → headless → sim_* → core_*`,
+//! consuming snapshots only — `Snapshot::capture` is the single
+//! function that touches `World`.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
+#![warn(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+pub mod app;
+pub mod events;
+pub mod panes;
+pub mod snapshot;

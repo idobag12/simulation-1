@@ -11,5 +11,6 @@ mod audit;
 
 pub use audit::{AuditSystem, audit_economy};
 
+pub mod metrics;
 pub mod narrative;
-pub use narrative::stories;
+pub use narrative::{stories, stories_with_subjects};
